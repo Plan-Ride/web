@@ -1,0 +1,87 @@
+// Service worker: caches the app shell so the PWA launches offline, and shows
+// "follow this bus" push alerts. API requests (/api/*) are always network.
+const CACHE = 'testem-shell-v52-2.18.0';
+const SHELL = [
+  '/',
+  '/index.html',
+  '/styles.css',
+  '/app.js',
+  '/js/core.js',
+  '/js/i18n.js',
+  '/js/logic.js',
+  '/js/live.js',
+  '/js/planner.js',
+  '/js/rides.js',
+  '/js/submit.js',
+  '/qrcode.min.js',
+  '/manifest.webmanifest',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/apple-touch-icon.png',
+];
+
+self.addEventListener('install', (event) => {
+  // cache: 'reload': past the browser's HTTP cache, or a new version could store the old files (EM-0076's fix didn't show).
+  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return;
+
+  // Navigations: network first, cached shell when offline.
+  if (request.mode === 'navigate') {
+    event.respondWith(fetch(request).catch(() => caches.match('/index.html')));
+    return;
+  }
+  // Static assets: network first so updates land, cache as the offline fallback.
+  event.respondWith(
+    fetch(request, { cache: 'no-cache' }) // revalidated (a 304 when unchanged), never an hour-old copy
+      .then((resp) => {
+        if (resp.ok) {
+          const copy = resp.clone();
+          caches.open(CACHE).then((c) => c.put(request, copy));
+        }
+        return resp;
+      })
+      .catch(() => caches.match(request))
+  );
+});
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data.json(); } catch { data = { title: 'Plan&Ride', body: event.data?.text() || '' }; }
+  event.waitUntil(self.registration.showNotification(data.title || 'Plan&Ride', {
+    data: { url: data.url || '/' },
+    body: data.body || '',
+    tag: data.tag,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    renotify: true,
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    // Where the notification leads: the followed bus on the home tab, or a regular ride.
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const url = event.notification.data?.url || '/';
+      const open = list.find((c) => new URL(c.url).origin === self.location.origin);
+      if (!open) return self.clients.openWindow(url);
+      open.postMessage({ type: 'open', url });
+      return open.focus();
+    })
+  );
+});
