@@ -494,7 +494,7 @@ function selectTab(tab) {
   const el = $('#tab-' + tab);
   if (tab === 'ticket') renderTicket(el);
   if (tab === 'departures') live.renderDepartures(el);
-  if (tab === 'planner') renderPlanner(el, { openStop: openStopFromPlanner });
+  if (tab === 'planner') renderPlanner(el, { openStop: openStopFromPlanner, accounts: () => ({ card: hasSadzv() && unlocked() ? selectedCard() : null, ids: hasIds() ? s.ids.account : null }) });
   if (tab === 'history') unlocked() ? renderHistory(el) : renderLocked(el);
   if (tab === 'account') renderAccount(el);
   el.scrollTop = 0;
@@ -1011,6 +1011,8 @@ function accountRestHtml(open, view) {
       ${link('appearance', t('s_appearance'), t('s_appearance_hint'))}
       ${link('language', t('s_language'), lang() === 'en' ? t('lang_en') : t('lang_sk'))}
       ${link('community', t('s_community'), t('s_community_hint'))}
+      ${switchRow('walk-other', t('walk_other'), t('walk_other_hint'), store.get('walkOther', true))}
+      ${link('sources', t('sources_title'), t('sources_hint'))}
       ${link('about', t('s_about'), t('version', VERSION))}
     </ul>
     <ul class="list">${link('bug', t('s_bug'), t('s_bug_hint'))}${link('feature', t('s_feature'), t('s_feature_hint'))}<li><button class="row link" data-support><span class="row-text"><span class="row-title">${t('s_support')}</span><span class="row-sub">${t('s_support_hint')}</span></span><span aria-hidden="true">›</span></button></li></ul>
@@ -1035,6 +1037,7 @@ function accountRestClick(e, el) {
   if (e.target.closest('[data-ticket-default]')) { store.set('ticketDefault', store.get('ticketDefault', 'sadzv') === 'ids' ? 'sadzv' : 'ids'); renderAccount(el); return true; }
   if (e.target.closest('[data-primary-ask]')) { askPrimary(true); return true; }
   if (e.target.id === 'ticket-auto') { store.set('ticketAuto', e.target.checked); return true; }
+  if (e.target.id === 'walk-other') { store.set('walkOther', e.target.checked); return true; }
   return false;
 }
 
@@ -1095,9 +1098,9 @@ function renderAccount(el) {
 // ------------------------------------------------------------------ settings pages
 
 function openSettings(page) {
-  const titles = { reminders: 's_reminders', security: 's_security', appearance: 's_appearance', language: 's_language', community: 's_community', about: 's_about', bug: 's_bug', feature: 's_feature' };
+  const titles = { reminders: 's_reminders', security: 's_security', appearance: 's_appearance', language: 's_language', community: 's_community', about: 's_about', bug: 's_bug', feature: 's_feature', sources: 'sources_title' };
   const body = openPage(t(titles[page]), () => { if (s.tab === 'account') renderAccount($('#tab-account')); });
-  ({ reminders, security, appearance, language, community: communitySettings, about, bug: bugReport, feature: (b) => bugReport(b, true) })[page](body);
+  ({ reminders, security, appearance, language, community: communitySettings, about, sources, bug: bugReport, feature: (b) => bugReport(b, true) })[page](body);
 }
 
 const ARRIVE_CHOICES = [1, 2, 3, 5, 10];
@@ -1106,7 +1109,9 @@ function reminders(body) {
   const custom = !ARRIVE_CHOICES.includes(lead);
   body.innerHTML = `
     ${hasAccount() ? `<label class="field">${t('threshold')}<input type="number" step="0.10" min="0" inputmode="decimal" id="threshold" value="${store.get('threshold', 1).toFixed(2)}"></label>
-    <ul class="list">${switchRow('expiry', t('expiry_warn'), t('expiry_warn_hint'), store.get('expiryWarn', true))}</ul>` : ''}
+    <ul class="list">${switchRow('expiry', t('expiry_warn'), t('expiry_warn_hint'), store.get('expiryWarn', true))}</ul>
+    <h2 class="section-label">${t('pay_bank_title')}</h2>
+    <ul class="list">${switchRow('bank-city', t('pay_bank_city'), t('pay_bank_city_hint'), store.get('bankCardCity', false))}${switchRow('bank-region', t('pay_bank_region'), t('pay_bank_region_hint'), store.get('bankCardRegion', false))}</ul>` : ''}
     <h2 class="section-label">${t('arrive_title')}</h2>
     <p class="hint">${t('arrive_label')}</p>
     <div class="chips" role="radiogroup" id="arrive">
@@ -1128,6 +1133,24 @@ function reminders(body) {
   };
   const expiry = $('#expiry', body);
   if (expiry) expiry.onchange = (e) => store.set('expiryWarn', e.target.checked);
+  // 2.18.0: buses paid with a bank card: no "credit won't cover it" in the planner.
+  const bankCity = $('#bank-city', body), bankRegion = $('#bank-region', body);
+  if (bankCity) bankCity.onchange = (e) => store.set('bankCardCity', e.target.checked);
+  if (bankRegion) bankRegion.onchange = (e) => store.set('bankCardRegion', e.target.checked);
+}
+
+/** 2.18.0: the open data the app uses and their licences. */
+const SOURCES = [
+  ['source_bbsk', 'https://opendata.bbsk.sk/'],
+  ['source_bratislava', 'https://opendata.bratislava.sk/'],
+  ['source_gtfssk', 'https://gtfs.sk/'],
+  ['source_zsr', 'https://data.slovensko.sk/datasety/ebeeedf1-aca2-451a-bdc0-35d536714888'],
+  ['source_osm', 'https://www.openstreetmap.org/copyright'],
+  ['source_meteo', 'https://open-meteo.com/'],
+];
+function sources(body) {
+  body.innerHTML = `<p class="hint">${t('sources_intro')}</p><ul class="list sources">${SOURCES.map(([key, url]) =>
+    `<li><a class="row link" href="${url}" target="_blank" rel="noopener"><span class="row-text"><span class="row-title">${esc(t(key))}</span><span class="row-sub">${esc(t(key + '_what'))}</span></span><span aria-hidden="true">›</span></a></li>`).join('')}</ul>`;
 }
 
 function security(body) {

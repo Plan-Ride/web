@@ -100,6 +100,13 @@ button { cursor: pointer; }
   font: 700 18px/1 var(--display); letter-spacing: 0.2px;
 }
 .plate.big { min-width: 58px; height: 42px; font-size: 24px; }
+/* 2.18.0: trains dark like the old plates, city lines (MHD) purple; buses keep the app's colour. */
+:root { --city: #6B3A8E; }
+.plate.k-rail { background: var(--plate); color: var(--on-plate); }
+.plate.k-city, .plate.k-tram, .plate.k-trolleybus { background: var(--city); color: #fff; }
+.kind-icon { flex: none; color: var(--accent-text, var(--accent)); vertical-align: middle; }
+.kind-icon.k-rail { color: var(--text); }
+.kind-icon.k-city, .kind-icon.k-tram, .kind-icon.k-trolleybus { color: var(--city); }
 
 .delay { font: 600 14px/1.2 var(--display); white-space: nowrap; }
 .delay.ontime, .delay.early { color: var(--muted); }
@@ -477,3 +484,24 @@ html { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
 
 /* 2.17.2: the bus goes on as another line (riders stay on) */
 .goes-on { margin: 2px 0 0; color: var(--accent-text); font-weight: 600; }
+
+/* ---------- 2.18.0 */
+.chips.modes { margin: 4px 0 8px; }
+.chip.mode .kind-icon { color: inherit; }
+.conn-kinds { display: flex; gap: 2px; flex: none; }
+.conn-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* EM-0114: both times stay on one line with a large font: they shrink instead of being cut off. */
+.conn-main .conn-times { font-size: clamp(16px, 5.6vw, 22px); white-space: nowrap; }
+.walk-row { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); margin: 6px 0; }
+.connection .notice.warn { margin: 8px 0; white-space: pre-line; }
+/* EM-0116: "Following this journey" in its own colour. */
+.btn.tonal, .btn.tonal:disabled { background: color-mix(in srgb, var(--ok) 20%, var(--surface)); color: var(--text); opacity: 1; }
+.also-following { margin-top: 10px; }
+.also-following ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.also-following li { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border-radius: 12px; padding: 6px 4px 6px 10px; }
+.also-following .plate { min-width: 38px; height: 26px; font-size: 15px; }
+.also-following .also-text { flex: 1; min-width: 0; font-size: 14px; }
+.sources .row-sub { white-space: normal; }
+/* EM-0111: the journey's Follow is tonal, not the blue of the line plates and pictograms above it. */
+.btn.soft { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); color: var(--accent-text); border-color: transparent; }
+a.row { color: inherit; text-decoration: none; }

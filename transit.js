@@ -119,6 +119,19 @@ export async function getDepartures(platformIds) {
   }).sort((a, b) => a.departsAtMs - b.departsAtMs);
 }
 
+/**
+ * EM-0117: the board worked a delay out from the countdown, which stops at "now" while the clock goes on (+5 on the
+ * board, +3 in the opened bus). A bus with a fresh position shows its own delay, as the opened trip does.
+ */
+async function withBusDelays(rows) {
+  if (!rows.some((d) => d.isRealtime)) return rows;
+  const now = Date.now();
+  const delays = new Map((await getVehicles().catch(() => []))
+    .filter((v) => v.delaySeconds != null && now - v.reportedAtMs > -60000 && now - v.reportedAtMs < GPS_FRESH_MS)
+    .map((v) => [`${v.lineId}/${v.tripNumber}`, v.delaySeconds]));
+  return rows.map((d) => (d.isRealtime && delays.has(`${d.lineId}/${d.tripNumber}`) ? { ...d, delaySeconds: delays.get(`${d.lineId}/${d.tripNumber}`) } : d));
+}
+
 /** "2026-09-24T20:31:40Z" from sadzv is Slovak local time despite the Z. */
 function localTimestamp(textValue) {
   const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(textValue || '');
@@ -151,6 +164,30 @@ async function placeBus(trip, busPosition, fromSadzv) {
   return { ...placed, delaySeconds: delayAt(hit.index, placed.stops.map((s) => s.scheduledMs)), positionSource: 'busGps' };
 }
 
+/**
+ * EM-0118: sadzv dates a bus that hasn't run yet with an earlier run (yesterday), so a journey starting with it took
+ * it for gone. The stop times go on the trip's own day (its service date, else the day nearest to now of its first
+ * stop), the next day past midnight. Changes `stops` in place.
+ */
+export function onTripDay(stops, serviceDate, now = Date.now()) {
+  const first = stops.find((s) => s.scheduledMs > 0);
+  if (!first) return stops;
+  const tod = (ms) => { const [h, m, sec] = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(ms).split(':').map(Number); return h * 3600 + m * 60 + sec; };
+  const startOf = (d) => localToEpoch(d.year, d.month, d.day, 0, 0);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(serviceDate || '');
+  const day = iso ? { year: +iso[1], month: +iso[2], day: +iso[3] }
+    : [-1, 0, 1].map((n) => addDays(todayLocal(now), n)).sort((a, b) => Math.abs(startOf(a) + tod(first.scheduledMs) * 1000 - now) - Math.abs(startOf(b) + tod(first.scheduledMs) * 1000 - now))[0];
+  let base = startOf(day), last = -1;
+  for (const s of stops) {
+    if (!(s.scheduledMs > 0)) continue;
+    const t = tod(s.scheduledMs);
+    if (last >= 0 && t < last - 6 * 3600) base = startOf(addDays(todayLocal(base + 43200000), 1)); // past midnight
+    last = t;
+    s.scheduledMs = base + t * 1000;
+  }
+  return stops;
+}
+
 /** Trip times are local wall-clock values encoded as if they were UTC. */
 function wallClockToEpochMs(wallSeconds) {
   if (!wallSeconds || wallSeconds <= 0) return 0;
@@ -169,8 +206,12 @@ const HUB_STOP = 'hub';
 /** S.A.D. Zvolen buses are on the board live from sadzv already. */
 const SADZV_FEED = 'sad-zvolen-as';
 
+/** 2.18.0: the kinds of transport emHUB knows; stop search and boards always ask for all of them, the planner for its switches. */
+export const MODES = ['bus', 'city', 'rail'];
+
 async function timetable(path, params) {
   if (!HUB_URL || !HUB_APP_KEY) throw Object.assign(new Error('Timetables are not set up on this server'), { status: 503 });
+  if (path === 'stops' || path === 'departures') params = { modes: MODES.join(','), ...params };
   const res = await fetch(`${HUB_URL}/api/v1/timetable/${path}?${new URLSearchParams(params)}`, {
     headers: { 'X-App-Key': HUB_APP_KEY }, signal: AbortSignal.timeout(30000),
   });
@@ -216,7 +257,8 @@ function sameBus(d, row) {
   return minutesGap(Math.floor(d.plannedSecondOfDay / 60), row.minutes) <= 1 && sameLine(d.line, row.line);
 }
 
-const suggestion = (s) => ({ text: s.name, value: s.id, value2: HUB_STOP, coorX: s.lat ?? '', coorY: s.lon ?? '', description: '' });
+// 2.18.0: a whole town ("Zvolen": its bus and train station) has `town` set.
+const suggestion = (s) => ({ text: s.name, value: s.id, value2: HUB_STOP, coorX: s.lat ?? '', coorY: s.lon ?? '', description: '', town: !!s.town });
 
 /** EM-0068: the timetable stop nearest to the rider (within 1.5 km), or null. */
 export async function nearestStop(lat, lon) {
@@ -234,6 +276,7 @@ async function boardRows(params) {
   return (await timetable('departures', params)).departures.map((d) => ({
     line: d.line, minutes: minutesOf(d.at), destination: d.headsign, platform: d.platform || '', operator: d.operator || '',
     atMs: d.at, scheduleUrl: tripUrl(d.tripId, d.seq, null), serviceDate: dateOf(d.at), feed: d.feed || '',
+    group: d.group || '', vehicle: d.mode || '',
   }));
 }
 
@@ -264,12 +307,13 @@ export async function otherCarriers(stop, live) {
     line: r.line, lineId: 0, destination: readableStop(r.destination), platformNumber: r.platform, routeNumber: '', tripNumber: 0,
     plannedSecondOfDay: r.minutes * 60, departsAtMs: r.atMs, isRealtime: false, isCancelled: false, delaySeconds: null,
     fromTimetable: true, operator: r.operator, scheduleUrl: r.scheduleUrl, serviceDate: r.serviceDate, feed: r.feed,
+    group: r.group, vehicle: r.vehicle,
   }));
 }
 
 /** The whole board for a stop: sadzv's live departures plus other carriers. Fails only when both fail. */
 export async function getBoard(platformIds, stop) {
-  const [live, other] = await Promise.allSettled([getDepartures(platformIds), stop ? otherCarriers(stop, []) : Promise.resolve([])]);
+  const [live, other] = await Promise.allSettled([getDepartures(platformIds).then(withBusDelays), stop ? otherCarriers(stop, []) : Promise.resolve([])]);
   if (live.status === 'rejected' && other.status === 'rejected') throw live.reason;
   const liveRows = live.status === 'fulfilled' ? live.value : [];
   const liveUntil = Math.max(0, ...liveRows.map((d) => d.departsAtMs));
@@ -333,6 +377,7 @@ export async function getLiveTrip(ref) {
       actualMs: actual ? actual * 1000 : null,
     };
   }).sort((a, b) => a.order - b.order);
+  onTripDay(stops, ref.serviceDate);
   const vehicle = await getVehicles().then((v) => v.find((x) => x.lineId === ref.lineId && x.tripNumber === ref.tripNumber)).catch(() => null);
   // sadzv keeps some positions for months: only a recent one says where the bus is.
   const age = vehicle ? Date.now() - vehicle.reportedAtMs : Infinity;
@@ -408,7 +453,11 @@ function connection(c) {
     routeUrl: l.live ? liveUrl(l) : tripUrl(l.tripId, l.from.seq, l.to.seq), serviceDate: dateOf(l.departure),
     transfer: l.transfer || null, // 2.17.0: { worked, runs } of the change onto this bus on earlier days
     goesOnAs: (l.continues || []).map((x) => [x.line, x.stop]), // 2.17.2: where the bus goes on as another line (riders stay on)
+    // 2.18.0: what kind it is (pictogram, plate colour) and its fare: the tariff from emHUB's price lists, IDS BBSK's units.
+    group: l.group || (l.mode === 'rail' ? 'rail' : 'bus'), vehicle: l.mode || 'bus', tariff: l.tariff || null, units: l.units ?? null,
   }));
+  // 2.18.0: a walk to the first bus and from the last one is shown, with where it ends and when.
+  const walkOf = (w) => (w?.type === 'walk' ? { stop: w.to?.name || '', minutes: Math.max(1, Math.round((w.arrival - w.departure) / 60000)), arrivalTime: clockOf(w.arrival) } : null);
   const walkMinutes = Math.round(c.legs.filter((l) => l.type === 'walk').reduce((n, w) => n + (w.arrival - w.departure), 0) / 60000);
   const minutes = Math.round((c.arrival - c.departure) / 60000);
   return {
@@ -416,30 +465,38 @@ function connection(c) {
     departureTime: segments[0]?.departureTime || clockOf(c.departure),
     arrivalTime: segments.at(-1)?.arrivalTime || clockOf(c.arrival),
     totalDuration: minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`,
-    segments, walkMinutes, arrivalMs: c.arrival,
+    segments, walkMinutes, departureMs: c.departure, arrivalMs: c.arrival, walkBefore: walkOf(c.legs[0]), walkAfter: walkOf(c.legs.at(-1)),
   };
 }
 
 export const rainOrder = (list) => [...list].sort((a, b) => rainKey(a) - rainKey(b));
 const rainKey = (c) => c.arrivalMs + (c.walkMinutes > 3 ? 15 * 60000 : 0);
 
-async function plan(from, to, epochS, directOnly, listed, arriveBy = false) {
-  const r = await timetable('plan', { from, to, time: epochS, n: 5, direct: directOnly ? 1 : 0, arrive: arriveBy ? 1 : 0 });
+/** The planner's switches ("bus,rail"), anything unknown dropped; none left means all. */
+export const plannerModes = (modes) => {
+  const list = MODES.filter((m) => String(modes || '').split(',').includes(m));
+  return (list.length ? list : MODES).join(',');
+};
+
+async function plan(from, to, epochS, directOnly, listed, arriveBy = false, modes = '', walkOther = true) {
+  const r = await timetable('plan', { from, to, time: epochS, n: 5, direct: directOnly ? 1 : 0, arrive: arriveBy ? 1 : 0, modes: plannerModes(modes),
+    ...(walkOther ? {} : { walkstart: 0, walkend: 0 }) });
   const connections = r.connections.map(connection).filter((c) => c.segments.length && !listed.includes(c.id));
   // "More" lists later departures: none after the time to be there (EM-0053).
   const last = arriveBy ? null : r.connections.at(-1);
-  const cursor = last ? { from, to, next: Math.floor(last.departure / 1000) + 60, directOnly: !!directOnly, listedIds: [...listed, ...connections.map((c) => c.id)] } : null;
+  const cursor = last ? { from, to, next: Math.floor(last.departure / 1000) + 60, directOnly: !!directOnly, modes: plannerModes(modes), walkOther,
+    listedIds: [...listed, ...connections.map((c) => c.id)] } : null;
   return { connections, cursor, from: suggestion(r.from), to: suggestion(r.to) };
 }
 
 /** date: "" (today), "2026-09-30" or "30.9.2026"; time: "7:05". */
-export async function searchConnections({ from, to, fromSug, toSug, time, date, directOnly, arriveBy }) {
+export async function searchConnections({ from, to, fromSug, toSug, time, date, directOnly, arriveBy, modes, walkOther = true }) {
   const iso = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(date || '');
   const day = iso ? { year: +iso[3], month: +iso[2], day: +iso[1] }
     : /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? (([y, m, d]) => ({ year: y, month: m, day: d }))(date.split('-').map(Number)) : todayLocal();
   const hm = /^(\d{1,2}):(\d{2})$/.exec(String(time || '').trim());
   const epoch = hm ? localToEpoch(day.year, day.month, day.day, +hm[1], +hm[2]) : Date.now();
-  const r = await plan(stopParam(fromSug, from), stopParam(toSug, to), Math.floor(epoch / 1000), directOnly, [], !!(arriveBy && hm));
+  const r = await plan(stopParam(fromSug, from), stopParam(toSug, to), Math.floor(epoch / 1000), directOnly, [], !!(arriveBy && hm), modes, walkOther !== false);
   // 2.17.0: rain where the journey starts (emHUB asks Open-Meteo): connections with little walking first, but never
   // ahead of one that gets there more than 15 min sooner (EM-0081).
   const { coorX: lat, coorY: lon } = r.from || {};
@@ -449,8 +506,28 @@ export async function searchConnections({ from, to, fromSug, toSug, time, date, 
   return { ...r, rainy };
 }
 
+/**
+ * 2.18.0: the same search within 10 minutes (same stops and options; "now", or the same time and day) is answered
+ * from the last answer, without the buses that have left since. The planner asks ahead once both stops are chosen.
+ */
+const searches = new Map(); // key -> { at, result }
+export async function cachedSearch(q) {
+  const key = JSON.stringify([q.from, q.to, q.fromSug?.value, q.toSug?.value, q.time, q.date, !!q.directOnly, !!q.arriveBy, plannerModes(q.modes), q.walkOther !== false]);
+  const now = Date.now();
+  const hit = searches.get(key);
+  if (hit && now - hit.at < 10 * 60000) {
+    const connections = hit.result.connections.filter((c) => !(c.departureMs < now));
+    if (connections.length) return { ...hit.result, connections };
+  }
+  const result = await searchConnections(q);
+  if (searches.size > 300) searches.clear(); // ponytail: crude bound, LRU if it ever matters
+  searches.set(key, { at: now, result });
+  return result;
+}
+
 export async function moreConnections(cursor) {
   if (!cursor?.from || !cursor?.to || !Number.isFinite(Number(cursor.next))) return { connections: [], cursor: null };
-  const r = await plan(String(cursor.from), String(cursor.to), Number(cursor.next), cursor.directOnly, (cursor.listedIds || []).map(String));
+  const r = await plan(String(cursor.from), String(cursor.to), Number(cursor.next), cursor.directOnly, (cursor.listedIds || []).map(String), false,
+    cursor.modes, cursor.walkOther !== false);
   return { connections: r.connections, cursor: r.connections.length ? r.cursor : null };
 }

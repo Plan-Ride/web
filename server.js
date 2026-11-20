@@ -782,7 +782,7 @@ app.get('/api/live/path', wrap((req) => transit.roadPath(req.query.stops || ''))
 app.get('/api/live/match', wrap((req) => transit.matchStopByName(String(req.query.name || ''))));
 app.get('/api/cp/suggest', wrap((req) => transit.suggestStops(String(req.query.city || ''), String(req.query.q || '').slice(0, 80))));
 app.get('/api/cp/nearest', wrap((req) => transit.nearestStop(Number(req.query.lat), Number(req.query.lon))));
-app.post('/api/cp/search', wrap((req) => transit.searchConnections(req.body || {})));
+app.post('/api/cp/search', wrap((req) => transit.cachedSearch(req.body || {})));
 app.post('/api/cp/more', wrap((req) => transit.moreConnections(req.body?.cursor)));
 
 // ---------------------------------------------------------------------------
@@ -850,6 +850,12 @@ app.get('/api/hub/delay', wrap((req) =>
 
 // 2.17.0: how full a bus is, riders' timetable submissions, and a live arrival link (emHUB checks each).
 app.get('/api/hub/notices', wrap((req) => hubRequest('notices', { clientIp: clientIp(req) })));
+// 2.18.0: the carriers' price lists as emHUB keeps them (the planner's prices); they change a few times a year.
+let faresCache = { at: 0, json: null };
+app.get('/api/hub/fares', wrap(async () => {
+  if (!faresCache.json || Date.now() - faresCache.at > 3600 * 1000) faresCache = { at: Date.now(), json: await hubRequest('fares') };
+  return faresCache.json;
+}));
 app.post('/api/hub/crowd', wrap((req) =>
   hubRequest('community/crowd', { method: 'POST', body: { tripKey: req.body?.tripKey, reporter: req.body?.reporter, level: Number(req.body?.level) }, clientIp: clientIp(req) })));
 app.post('/api/hub/submissions', wrap((req) =>

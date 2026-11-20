@@ -219,3 +219,40 @@ console.log('ok');
   assert.deepEqual(order, ['7:40 dry', '7:32 walk', '8:50 dry']);
   console.log('ok 2.18.0: rain order within reason');
 }
+
+// ---------------------------------------------------------------- 2.18.0 web port
+{
+  const { onTripDay, plannerModes } = await import('./transit.js');
+  const { lineKind } = await import('./public/js/logic.js');
+  const { journeyCost, parseTariffs, fareCategory } = await import('./public/js/fares.js');
+
+  // EM-0118: sadzv dated a 13:17 bus of 20.11. with 19.11.: its stops go on the trip's day (the nearest to now).
+  const at = (d, h, m) => localToEpoch(2026, 11, d, h, m);
+  const st = [[13, 17], [13, 40], [23, 50], [0, 10]].map(([h, m], i) => ({ name: 'S' + i, scheduledMs: at(19, h, m) }));
+  onTripDay(st, '', at(20, 12, 40));
+  assert.deepEqual(st.map((s) => s.scheduledMs), [at(20, 13, 17), at(20, 13, 40), at(20, 23, 50), at(21, 0, 10)], 'EM-0118: on its day, past midnight the next');
+  const dated = [{ scheduledMs: at(19, 8, 0) }];
+  onTripDay(dated, '2026-11-22', at(20, 12, 0));
+  assert.equal(dated[0].scheduledMs, at(22, 8, 0), 'EM-0118: a service date wins');
+
+  assert.equal(lineKind('R 845'), 'rail');
+  assert.equal(lineKind('Bus 60107', 'bus', 'bus'), 'bus');
+  assert.equal(lineKind('Bus 9', 'city', 'tram'), 'tram');
+  assert.equal(lineKind('Bus 12', 'city', 'bus'), 'city');
+  assert.equal(plannerModes('rail,bogus'), 'rail');
+  assert.equal(plannerModes(''), 'bus,city,rail', 'none chosen: all');
+
+  // Fares: a city ticket covers a change within its time (Banská Bystrica: 0,10 € once), IDS BBSK by units, trains "+ train".
+  const tariffs = parseTariffs({ tariffs: [
+    { id: 'bb', kind: 'flat', transferMinutes: 40, transferCents: 10, prices: { full: [90, 120], student: [45, 60] } },
+    { id: 'ids', kind: 'units', as: { full: 'full', student: 'discount' }, bands: [{ upTo: 2, full: [80, 100], discount: [40, 50] }, { upTo: 6, full: [150, 180], discount: [75, 90] }] },
+  ] });
+  const seg = (line, time, extra) => ({ line, departureTime: time, operatorName: '', group: 'bus', ...extra });
+  let cost = journeyCost(tariffs, [seg('Bus 7', '7:00', { tariff: 'bb' }), seg('Bus 31', '7:20', { tariff: 'bb' }), seg('Bus 31', '7:30', { tariff: 'bb' })], 'full', false, false);
+  assert.equal(cost.sadzvCents, 90 + 10 + 90, 'one change for 0,10 €, then a new ticket');
+  cost = journeyCost(tariffs, [seg('Bus 60101', '8:00', { tariff: 'ids', units: 3 }), seg('R 845', '9:00', { group: 'rail' })], fareCategory(['Žiak/Študent do 26 rokov']), false, false);
+  assert.deepEqual([cost.idsCents, cost.train, cost.unknown], [75, true, false], 'student IDS fare by units, plus a train');
+  cost = journeyCost(tariffs, [seg('Bus 60101', '8:00', { tariff: 'ids', units: 3 })], 'full', false, true);
+  assert.deepEqual([cost.idsCents, cost.covered], [0, true], 'a season ticket covers it');
+  console.log('ok 2.18.0 web: trip day, kinds, modes, fares');
+}

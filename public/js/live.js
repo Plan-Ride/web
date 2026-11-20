@@ -1,8 +1,8 @@
 // Departures, stop boards, trip sheet and "follow this bus" for the web client.
 import { t, lang } from './i18n.js';
-import { $, $$, esc, api, apiJson, store, config, clock, countdown, delayChip, delayInfo, plate, toast, openSheet, openPage, closeOverlay, log } from './core.js';
+import { $, $$, esc, api, apiJson, store, config, clock, countdown, delayChip, delayInfo, plate, kindIcon, kindPlate, toast, openSheet, openPage, closeOverlay, log } from './core.js';
 import { openSubmit } from './submit.js';
-import { tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg } from './logic.js';
+import { tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
 
 /** Helping with bus positions: 'off' | 'buttons' | 'auto' (earlier versions had an on/off switch). */
 export const communityMode = () => store.get('communityMode', store.get('communityOn', false) ? 'buttons' : 'off');
@@ -168,7 +168,7 @@ function renderBoard() {
     const secs = Math.round((d.departsAtMs - now) / 1000);
     const hl = b.highlight && d.line === b.highlight.line && clock(d.departsAtMs - (d.delaySeconds || 0) * 1000) === b.highlight.time;
     return `<li><button class="departure ${d.isCancelled ? 'cancelled' : ''} ${hl ? 'highlight' : ''}" data-dep="${i}">
-      ${plate(d.line)}
+      ${kindIcon(lineKind(d.line, d.group, d.vehicle), 22)}${kindPlate(d.line, lineKind(d.line, d.group, d.vehicle))}
       <span class="dep-main"><span class="dep-dest">${esc(d.destination)}</span>
         <span class="dep-sub">${d.platformNumber ? esc(t('platform', d.platformNumber)) : ''} ${d.isCancelled ? `<span class="delay very">${t('cancelled')}</span>` : d.fromTimetable ? `<span class="hint small">${esc(d.operator || t('other_carrier'))}</span>` : delayChip(d.delaySeconds)}</span></span>
       <span class="dep-time"><strong>${esc(countdown(secs))}</strong><span>${clock(d.departsAtMs)}${d.isRealtime ? ` <i class="live-dot" title="${esc(t('live'))}"></i>` : d.fromTimetable ? ` · ${esc(t('timetable'))}` : ''}</span></span>
@@ -219,7 +219,7 @@ export async function renderPreview(el) {
     const i = n + 1;
     const deps = boards[i].ok ? boards[i].json.slice(0, 3) : [];
     return `<button class="preview-board" data-preview-stop="${stop.id}"><span class="preview-name">${esc(stop.name)}</span>
-      <ul class="board compact">${deps.map((d) => `<li><div class="departure">${plate(d.line)}<span class="dep-main"><span class="dep-dest">${esc(d.destination)}</span><span class="dep-sub">${d.fromTimetable ? `<span class="hint small">${esc(d.operator || t('timetable'))}</span>` : delayChip(d.delaySeconds)}</span></span>
+      <ul class="board compact">${deps.map((d) => `<li><div class="departure">${kindIcon(lineKind(d.line, d.group, d.vehicle), 22)}${kindPlate(d.line, lineKind(d.line, d.group, d.vehicle))}<span class="dep-main"><span class="dep-dest">${esc(d.destination)}</span><span class="dep-sub">${d.fromTimetable ? `<span class="hint small">${esc(d.operator || t('timetable'))}</span>` : delayChip(d.delaySeconds)}</span></span>
       <span class="dep-time"><strong>${esc(countdown((d.departsAtMs - Date.now()) / 1000))}</strong><span>${clock(d.departsAtMs)}</span></span></div></li>`).join('') || `<li class="hint small">${t('board_empty')}</li>`}</ul></button>`;
   }).join('');
 }
@@ -284,14 +284,9 @@ async function loadTrip(ref, { withCoordinates = false } = {}) {
   const pooled = res?.delay;
   detail.history = res?.history || null;
   detail.crowd = res?.crowd || null;
-  if (!pooled) {
-    // No one reported today: optionally shift the timetable by how late this trip usually is.
-    if (detail.history && detail.positionSource === 'timetable' && store.get('predictShift', true)) {
-      // 2.17.2: each stop by how late it usually is there; the one figure is where the bus is now.
-      Object.assign(detail, { delaySeconds: usualNow(detail.history, detail.stops), positionSource: 'history' });
-    }
-    return detail;
-  }
+  // EM-0107: nobody knows where the bus is, so the times stay the timetable's. How late it usually is goes along as a
+  // hint only ("Usually ~4 min late"); 2.17.2 shifted every stop by it, which read as a real delay.
+  if (!pooled) return detail;
   detail.community = pooled;
   if (pooled.source === 'gps' && Date.now() - pooled.updatedAt < 3 * 60000) {
     Object.assign(detail, { delaySeconds: pooled.delaySeconds, positionSource: 'riderGps' });
@@ -527,7 +522,8 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
   if (!body || !sheetTrip) return;
   const s = sheetTrip;
   const following = sameRef(follow?.ref, s.ref);
-  const detail = following && follow.detail ? effectiveDetail(follow) : s.detail;
+  const waiting = !following && others.some((o) => sameRef(o.ref, s.ref)); // 2.18.0: followed after the live one
+  const detail = following && follow.detail ? withPassedTimes(effectiveDetail(follow)) : s.detail;
   const alight = following ? follow.alightOrder : s.alightOrder;
   const status = s.ref.scheduleUrl
     ? (detail?.community && detail.positionSource !== 'timetable' ? `${delayChip(detail.delaySeconds)} <span class="hint small">${esc(ridersText(detail.community.reporters))}</span>` : `<span class="hint small">${t('schedule_only')}</span>`)
@@ -551,10 +547,11 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
     }).join('')}</ol>`;
   }
   body.innerHTML = `
-    <div class="trip-head">${plate(s.ref.line, 'big')}<div class="trip-title"><h3>${esc(detail?.destination || s.ref.destination)}</h3><div>${statusLine}</div></div>
+    <div class="trip-head">${kindPlate(s.ref.line, lineKind(s.ref.line), 'big')}<div class="trip-title"><h3>${esc(detail?.destination || s.ref.destination)}</h3><div>${statusLine}</div></div>
       ${detail?.stops?.length ? `<button class="icon-btn" data-map aria-label="${esc(t('map_open'))}">${MAP_SVG}</button>` : ''}
       <button class="icon-btn" data-share aria-label="${esc(t('share_trip'))}">${SHARE_SVG}</button></div>
-    ${following
+    ${waiting ? `<p class="hint">${t('follow_waiting_turn')}</p><button class="btn outline wide" data-unfollow-other>${t('unfollow')}</button>`
+      : following
       ? `<p class="hint">${t('following_hint')}</p><button class="btn outline wide" data-unfollow>${t('unfollow')}</button>`
       : `<button class="btn wide" data-follow ${detail?.stops?.length ? '' : 'disabled'}>${BUS_SVG}${t('follow')}</button>
          <button class="btn outline wide" data-add-journey ${detail?.stops?.length ? '' : 'disabled'}>${t('journey_add')}</button>
@@ -567,6 +564,7 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
       startFollow({ ref: s.ref, boardingPlatformIds: s.boardingPlatformIds, alightOrder: s.alightOrder, detail: s.detail });
     }
     if (e.target.closest('[data-unfollow]')) stopFollow();
+    if (e.target.closest('[data-unfollow-other]')) { dropOther(s.ref); return renderTripSheet(); }
     if (e.target.closest('[data-map]')) return openBusMap(s.ref, detail, alight);
     if (e.target.closest('[data-share]')) return shareTrip({ ref: s.ref, boardingPlatformIds: following ? follow.boardingPlatformIds : s.boardingPlatformIds, alightOrder: alight }, detail?.destination || s.ref.destination);
     if (e.target.closest('[data-add-journey]')) addToDraft({ ref: s.ref, boardingPlatformIds: s.boardingPlatformIds, alightOrder: s.alightOrder, ...legStops(s, detail, alight) });
@@ -613,7 +611,34 @@ function askDrive(fix) {
 
 let draft = store.get('journeyDraft', []); // [{ ref, boardingPlatformIds, alightOrder }]
 function setDraft(list) { draft = list; store.set('journeyDraft', list); renderJourneyBars(); }
-function addToDraft(leg) { setDraft([...draft.filter((x) => !sameRef(x.ref, leg.ref)), leg]); }
+// 2.18.0: the buses of your own journey line up by when they leave, so the later one can be added first.
+function addToDraft(leg) { setDraft([...draft.filter((x) => !sameRef(x.ref, leg.ref)), leg].sort((a, b) => leavesMs(a) - leavesMs(b))); }
+
+/** When a followed bus leaves where the rider gets on: from its stops, else its planner time on its day. */
+function leavesMs(f) {
+  if (f.leavesAt) return f.leavesAt;
+  const d = f.detail;
+  if (d?.stops?.length) {
+    const st = d.stops.find((x) => (d.boardingOrder != null ? x.order === d.boardingOrder : (f.boardingPlatformIds || []).includes(x.platformId))) || d.stops[0];
+    if (st.scheduledMs) return st.scheduledMs;
+  }
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(f.ref?.serviceDate || '');
+  const day = iso ? { year: +iso[1], month: +iso[2], day: +iso[3] } : todayLocal();
+  const m = /(\d{1,2}):(\d{2})/.exec(f.leaves || '');
+  if (m) return localToEpoch(day.year, day.month, day.day, +m[1], +m[2]);
+  if (f.ref?.plannedSecondOfDay >= 0) return localToEpoch(day.year, day.month, day.day, 0, 0) + f.ref.plannedSecondOfDay * 1000;
+  return Date.now();
+}
+
+// 2.18.0 (EM-0100, EM-0101): following another bus no longer replaces the one followed. The one leaving first is
+// followed live; the others wait here ("Also following") and go live in turn.
+let others = store.get('followOthers', []); // [{ ref, boardingPlatformIds, alightOrder, nextLegs, toStop, arrives, leaves, leavesAt }]
+const keepOf = ({ ref, boardingPlatformIds, alightOrder, nextLegs = [], fromStop = '', toStop = null, arrives = null, leaves = '', leavesAt }) =>
+  ({ ref, boardingPlatformIds, alightOrder, nextLegs, fromStop, toStop, arrives, leaves, leavesAt });
+function setOthers(list) { others = list.sort((a, b) => a.leavesAt - b.leavesAt); store.set('followOthers', others); }
+/** Followed now or waiting to be. */
+export const isFollowed = (ref) => !!ref && (sameRef(follow?.ref, ref) || others.some((o) => sameRef(o.ref, ref)));
+function dropOther(ref) { setOthers(others.filter((o) => !sameRef(o.ref, ref))); live.onChange(); renderAllFollowSlots(); }
 
 /** Where the user gets on and off an opened bus and when, for the journey's list (EM-0066, EM-0067). */
 function legStops(s, detail, alight) {
@@ -657,7 +682,19 @@ function renderJourneyBars() {
   document.querySelectorAll('#journey-bar-dep, [data-journey-bar]').forEach((el) => { el.innerHTML = journeyBarHtml(); bindJourneyBar(el); });
 }
 
-export function startFollow({ ref, boardingPlatformIds, alightOrder, detail, nextLegs = [], toStop = null, arrives = null }) {
+export function startFollow(args, { replace = false } = {}) {
+  const { ref, boardingPlatformIds, alightOrder, detail, nextLegs = [], toStop = null, arrives = null, leaves = '' } = args;
+  const leavesAt = leavesMs(args);
+  if (follow && !replace && !sameRef(follow.ref, ref)) {
+    // Another bus: the one leaving first is followed live, the other waits.
+    if (leavesAt >= (follow.leavesAt || leavesMs(follow))) {
+      setOthers([...others.filter((o) => !sameRef(o.ref, ref)), keepOf({ ...args, leavesAt })]);
+      toast(t('follow_also_added', ref.line));
+      live.onChange();
+      return renderAllFollowSlots();
+    }
+    setOthers([...others.filter((o) => !sameRef(o.ref, ref)), keepOf({ ...follow, leavesAt: follow.leavesAt || leavesMs(follow) })]);
+  } else if (others.some((o) => sameRef(o.ref, ref))) setOthers(others.filter((o) => !sameRef(o.ref, ref)));
   if (follow?.pushId) api('/api/unfollow', { id: follow.pushId });
   stopPass = stopPassDetector();
   lastArrivalStop = -1;
@@ -666,8 +703,10 @@ export function startFollow({ ref, boardingPlatformIds, alightOrder, detail, nex
   lastRiderIndex = -1;
   checkIndex = -1;
   leftOnBus = false;
+  stopDelay = null;
+  passedDelay = new Map();
   follow = {
-    ref, boardingPlatformIds, alightOrder, detail, nextLegs, toStop, arrives,
+    ref, boardingPlatformIds, alightOrder, detail, nextLegs, toStop, arrives, leaves, leavesAt, fromStop: args.fromStop || '',
     // New random id per bus, so reports can't be linked across trips. (randomUUID is missing on older iOS.)
     reporter: [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join(''),
     localDelay: null, pushId: null, startedAt: Date.now(), note: '',
@@ -691,6 +730,9 @@ export function stopFollow() {
   saveFollow();
   clearTimeout(followTimer);
   stopGeo();
+  // The next bus followed goes live.
+  const [next, ...rest] = others;
+  if (next) { setOthers(rest); return startFollow(next, { replace: true }); }
   live.onChange();
   renderAllFollowSlots();
 }
@@ -712,7 +754,10 @@ function effectiveDetail(f) {
   const d = f.detail;
   if (!d) return null;
   // EM-0096: a delay really measured replaces the guess from earlier days, at every stop.
-  if (f.localDelay && f.localDelay.at >= (d.community?.updatedAt || 0)) {
+  // EM-0104: on the bus, what this phone measured stays for 5 min: emHUB's pooled answer to the phone's own "arrived"
+  // report is newer, but counts an early bus as on time, and the card fell back to "on time" at every stop.
+  const mine = f.localDelay?.fromGps && Date.now() - f.localDelay.at <= 5 * 60000;
+  if (f.localDelay && (mine || f.localDelay.at >= (d.community?.updatedAt || 0))) {
     return { ...d, delaySeconds: f.localDelay.seconds, positionSource: d.positionSource === 'history' ? 'timetable' : d.positionSource };
   }
   return d;
@@ -749,7 +794,7 @@ async function followTick() {
         // Changed buses: follow the next one (and move the push alerts over to it).
         const push = !!follow.pushId;
         toast(t('journey_change', next.ref.line, p.lastStopName));
-        startFollow({ ...next, nextLegs: rest });
+        startFollow({ ...next, nextLegs: rest }, { replace: true });
         if (push) subscribePush(true);
         return;
       }
@@ -864,6 +909,17 @@ function stopGeo() {
 
 let riderWatch = null, lastRiderIndex = -1, lastRiderReportAt = 0, stopPass = stopPassDetector(), lastArrivalStop = -1;
 let checkIndex = -1, leftOnBus = false; // EM-0096: the last location check's place on the route; it went on past the stop
+let stopDelay = null; // EM-0104: how late the bus left the last stop this phone saw it leave
+let passedDelay = new Map(); // EM-0104: stop index -> how late the bus was there; the stop list keeps those times
+
+/** EM-0104: the stops behind the followed bus keep the time it was really there, not the delay of the moment. */
+function withPassedTimes(d) {
+  if (!d?.stops?.length) return d;
+  const p = tripProgress(d, follow);
+  if (d.delaySeconds != null) for (let i = 0; i < Math.min(p.nextIndex, d.stops.length); i++) if (!passedDelay.has(i)) passedDelay.set(i, d.delaySeconds);
+  if (!passedDelay.size) return d;
+  return { ...d, stops: d.stops.map((st, i) => (st.actualMs == null && passedDelay.has(i) && i < p.nextIndex ? { ...st, actualMs: st.scheduledMs + passedDelay.get(i) * 1000 } : st)) };
+}
 const STOP_RADIUS_M = 60; // a bus standing this close to a stop is stopped there (timetable stop positions can be tens of metres off)
 const MOVING_MPS = 2.5; // slower than this (about 9 km/h) the bus counts as stopped
 
@@ -902,6 +958,7 @@ function onRiderFix(pos) {
   if (left && left[0] >= boarding && left[0] < d.stops.length) {
     const [stop, at, stopped] = left;
     follow.localDelay = { seconds: Math.round((at - scheduled[stop]) / 1000), at: now, fromGps: true };
+    stopDelay = follow.localDelay.seconds;
     renderAllFollowSlots();
     // The hub takes "now" from its own clock, so shift the stop time by how long ago it left.
     return send(stop, scheduled[stop] + (now - at), stopped ? 'departed' : 'passed');
@@ -913,7 +970,11 @@ function onRiderFix(pos) {
     return send(nearest, scheduled[nearest], 'arrival');
   }
   if (hit.index < boarding + 0.05 || !moving) return;
-  follow.localDelay = { seconds: delayAt(hit.index, scheduled, now), at: now, fromGps: true };
+  // EM-0104: between stops the place is measured along the straight line from stop to stop, which is rough: the
+  // minutes to the next stop went up and down with every fix. The delay at the last stop stays, unless the bus is
+  // clearly (a minute) later than that.
+  const between = delayAt(hit.index, scheduled, now);
+  follow.localDelay = { seconds: stopDelay != null && between - stopDelay < 60 ? stopDelay : between, at: now, fromGps: true };
   renderAllFollowSlots();
   if (now - lastRiderReportAt < 15000) return; // between stops: every 15 s
   send(Math.min(Math.floor(hit.index), d.stops.length - 1), referenceAt(hit.index, scheduled, now));
@@ -1062,14 +1123,14 @@ function sendEta() {
 
 function followCardHtml() {
   const d = follow && effectiveDetail(follow);
-  if (!d?.stops?.length) return follow ? `<section class="follow"><p class="hint"><span class="spinner"></span> ${plate(follow.ref.line)} ${esc(follow.ref.destination)}</p></section>` : '';
+  if (!d?.stops?.length) return follow ? `<section class="follow"><p class="hint"><span class="spinner"></span> ${kindPlate(follow.ref.line, lineKind(follow.ref.line))} ${esc(follow.ref.destination)}</p></section>` : '';
   const p = tripProgress(d, follow);
   const f = follow;
   let delay;
   if (f.localDelay && d.delaySeconds === f.localDelay.seconds) delay = `${delayChip(d.delaySeconds)} <span class="hint small">${t(f.localDelay.fromGps ? 'community_your_phone' : 'community_yours')}</span>`;
   else if (d.community && (d.positionSource === 'riderGps' || d.positionSource === 'riders')) delay = `${delayChip(d.delaySeconds)} <span class="hint small">${esc(ridersText(d.community.reporters))}</span>`;
   else if (d.positionSource === 'history') delay = `${delayChip(d.delaySeconds)} <span class="hint small">${t('history_estimate')}</span>`;
-  else if (d.positionSource === 'timetable' && d.history) delay = historyHint(d);
+  else if (d.positionSource === 'timetable' && d.history && store.get('predictShift', true)) delay = historyHint(d);
   else if (d.positionSource === 'timetable' && f.ref.scheduleUrl) delay = `<span class="hint small">${t('schedule_only')}</span>`;
   else delay = delayChip(d.delaySeconds);
 
@@ -1103,7 +1164,7 @@ function followCardHtml() {
     }
   }
   return `<section class="follow" aria-live="polite">
-    <div class="follow-top">${plate(f.ref.line)}<span class="follow-dest">${esc(d.destination)}</span><strong class="follow-big">${esc(big)}</strong></div>
+    <div class="follow-top">${kindPlate(f.ref.line, lineKind(f.ref.line))}<span class="follow-dest">${esc(d.destination)}</span><strong class="follow-big">${esc(big)}</strong></div>
     <p class="follow-title">${esc(title)}</p>
     ${sub ? `<p class="follow-sub">${esc(sub)}</p>` : ''}
     ${f.nextLegs?.length ? `<ul class="follow-legs">${[
@@ -1116,10 +1177,22 @@ function followCardHtml() {
     ${f.note ? `<p class="hint small">${esc(f.note)}</p>` : ''}
     ${actions ? `<div class="follow-actions">${actions}</div>` : ''}
     ${crowdHtml(d, p)}
+    ${othersHtml()}
     <div class="follow-foot">
       <label class="mini-switch"><input type="checkbox" data-push ${f.pushId ? 'checked' : ''}> ${t('follow_push')}</label>
       <span>${config.hub ? `<button class="text-btn" data-eta>${t(f.eta ? 'eta_sharing' : 'eta_share')}</button>` : ''}<button class="text-btn" data-open-trip>${t('show_stops')}</button><button class="text-btn danger" data-stop>${t('unfollow')}</button></span>
     </div></section>`;
+}
+
+/** The other buses followed, each with when it leaves and a way to stop following it. */
+function othersHtml() {
+  if (!others.length) return '';
+  return `<div class="also-following"><p class="section-label">${t('also_following')}</p><ul>${others.map((o, i) => {
+    const legs = [o, ...(o.nextLegs || [])];
+    const route = [o.fromStop || '', legs.at(-1).toStop || o.ref.destination || ''].filter(Boolean).map(readableStop).join(' → ');
+    return `<li>${legs.slice(0, 3).map((l) => kindPlate(l.ref.line, lineKind(l.ref.line))).join('')}<span class="also-text">${esc(route)}<br><span class="hint small">${esc(t('follow_leaves', clock(o.leavesAt)))}</span></span>
+      <button class="icon-btn" data-drop-other="${i}" aria-label="${esc(t('unfollow'))}">✕</button></li>`;
+  }).join('')}</ul></div>`;
 }
 
 const slots = new Set();
@@ -1134,6 +1207,8 @@ export function renderFollowSlot(el) {
     if (crowd) return reportCrowd(Number(crowd.dataset.crowd));
     if (e.target.closest('[data-eta]')) return shareEta();
     if (e.target.closest('[data-stop]')) return stopFollow();
+    const drop = e.target.closest('[data-drop-other]');
+    if (drop) return dropOther(others[Number(drop.dataset.dropOther)]?.ref);
     // EM-0072: on foot or by car today, one tap.
     if (e.target.closest('[data-car]')) { store.set('catchCar', !store.get('catchCar', false)); drive.at = 0; return renderAllFollowSlots(); }
     if (e.target.closest('[data-open-trip]') && follow) return openTrip(follow.ref, { boardingPlatformIds: follow.boardingPlatformIds, alightOrder: follow.alightOrder });

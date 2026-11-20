@@ -9,6 +9,17 @@ export const lineNumber = (line) => String(line || '').trim().split(' ').pop();
 export const readableStop = (name) =>
   String(name || '').split(',').map((s) => s.trim()).filter(Boolean).join(', ');
 
+/** 2.18.0: train lines are written with their kind in front: "Os 7308", "R 845", "IC 501", "REX 1810". */
+const RAIL_LINE = /^(Os|R|REX|RR|Ex|IC|EC|EN|SC|RJ|LE|ZR|Zr|Sp|Sv|Mn|Rx|RE|ICE|NJ|D)\s*\d+/;
+/** "rail", "tram", "trolleybus", "city" or "bus", from a line's kind, vehicle or how it is written (as the Android app). */
+export function lineKind(line, group = '', vehicle = '') {
+  if (group === 'rail' || vehicle === 'rail' || RAIL_LINE.test(String(line || '').trim())) return 'rail';
+  if (vehicle === 'tram' || vehicle === 'trolleybus') return vehicle;
+  return group === 'city' ? 'city' : 'bus';
+}
+/** The line a plate shows: a train keeps its kind ("R 845"), others the number ("Bus 60107" -> "60107"). */
+export const plateLine = (line, kind) => (kind === 'rail' ? String(line || '').trim() : String(line || '').trim().split(' ').at(-1));
+
 /**
  * A planner bus to follow: { ref, boardingPlatformIds, alightOrder }. A SAD Zvolen bus from the
  * live data ("sadzv:trip?...") is followed live from the stop where the user gets on; any other
@@ -38,7 +49,7 @@ function plannerLegOf(segment) {
     };
   }
   return {
-    ref: { line: lineNumber(segment.line), lineId: 0, routeNumber: '', tripNumber: 0, destination: readableStop(segment.arrivalStop),
+    ref: { line: segment.group === 'rail' ? String(segment.line).trim() : lineNumber(segment.line), lineId: 0, routeNumber: '', tripNumber: 0, destination: readableStop(segment.arrivalStop),
       scheduleUrl: url, serviceDate: segment.serviceDate || '', fromStopId: 0, plannedSecondOfDay: -1 },
     boardingPlatformIds: [],
     alightOrder: null,

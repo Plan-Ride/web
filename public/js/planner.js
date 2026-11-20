@@ -1,8 +1,9 @@
 // Planner for the web client (same flow as the Android Planner tab), from emhub's timetables.
 import { t, lang } from './i18n.js';
-import { $, esc, apiJson, store, plate, toast, clock } from './core.js';
-import { readableStop, lineNumber, nextRideDeparture, localToEpoch, WORKDAYS, EVERY_DAY, plannerLeg } from './logic.js';
-import { openScheduledTrip, startJourney } from './live.js';
+import { $, esc, apiJson, store, toast, clock, money, kindIcon, kindPlate } from './core.js';
+import { readableStop, lineNumber, nextRideDeparture, localToEpoch, WORKDAYS, EVERY_DAY, plannerLeg, lineKind } from './logic.js';
+import { openScheduledTrip, startJourney, isFollowed } from './live.js';
+import { parseTariffs, journeyCost, fareCategory } from './fares.js';
 import { rides, saveRides, rideDayText } from './rides.js';
 import { openSubmit } from './submit.js';
 
@@ -19,13 +20,29 @@ const p = {
 };
 let root = null;
 let onOpenStop = () => {};
+let accounts = () => ({}); // { card, ids }: the signed-in accounts, for prices and credit warnings
+
+// 2.18.0: which kinds of transport the planner may use (Bus, City, Train); the last one stays on.
+const MODES = ['bus', 'city', 'rail'];
+const modes = () => { const m = store.get('plannerModes', MODES).filter((x) => MODES.includes(x)); return m.length ? m : MODES; };
+
+// 2.18.0: the carriers' price lists, kept a day.
+let tariffs = parseTariffs(store.get('fares', null)?.json || {});
+(async () => {
+  const saved = store.get('fares', null);
+  if (saved && Date.now() - saved.at < 86400000 && tariffs) return;
+  const json = await apiJson('/api/hub/fares').catch(() => null);
+  const parsed = json && parseTariffs(json);
+  if (parsed) { tariffs = parsed; store.set('fares', { at: Date.now(), json }); if (root?.isConnected) renderBody(); }
+})();
 
 const routes = (key) => store.get(key, []).map(upgrade);
 const sameRoute = (a, b) => a.from.toLowerCase() === b.from.toLowerCase() && a.to.toLowerCase() === b.to.toLowerCase();
 
-export function renderPlanner(el, { openStop } = {}) {
+export function renderPlanner(el, { openStop, accounts: acc } = {}) {
   root = el;
   onOpenStop = openStop || onOpenStop;
+  accounts = acc || accounts;
   if (p.date && p.date < todayIso()) p.date = '';
   const saved = routes('savedRoutes');
   const isSaved = p.from && p.to && saved.some((r) => sameRoute(r, { from: p.from.trim(), to: p.to.trim() }));
@@ -40,7 +57,7 @@ export function renderPlanner(el, { openStop } = {}) {
       </div>
       <button type="button" class="chip" data-near>${t('nearest_stop')}</button>
       <div class="places">${['home', 'work'].map((k) => { const pl = store.get('place_' + k, null); return `<button type="button" class="place ${pl ? 'set' : ''}" data-place="${k}">
-        <b>${t('place_' + k)}</b><span>${esc(pl ? readableStop(pl.text) : t('place_not_set'))}</span></button>`; }).join('')}</div>
+        <b>${t('place_' + k)}</b><span>${esc(pl ? placeName(pl) : t('place_not_set'))}</span></button>`; }).join('')}</div>
       <div class="planner-opts">
         <div class="segmented small"><button type="button" aria-pressed="${!p.time && !p.date}" data-now>${t('leave_now')}</button>
           <label class="time-pick ${p.time ? 'on' : ''}">${t(p.time && p.arrive ? 'arrive_at_time' : 'at_time')} <input type="time" id="pl-time" value="${esc(p.time)}"></label>
@@ -49,6 +66,7 @@ export function renderPlanner(el, { openStop } = {}) {
         <label class="mini-switch"><input type="checkbox" id="pl-car" ${store.get('catchCar', false) ? 'checked' : ''}> ${t('to_stop_by_car')}</label>
         <label class="mini-switch"><input type="checkbox" id="pl-direct" ${p.direct ? 'checked' : ''}> ${t('direct_only')}</label>
       </div>
+      <div class="chips modes" role="group">${MODES.map((m) => `<button type="button" class="chip mode ${modes().includes(m) ? 'on' : ''}" data-mode="${m}" aria-pressed="${modes().includes(m)}">${kindIcon(m === 'city' ? 'tram' : m, 18)} ${t('kind_' + m)}</button>`).join('')}</div>
       <div class="planner-actions">
         <button class="btn" type="submit" ${p.loading ? 'disabled' : ''}>${p.loading ? '<span class="spinner"></span>' : t('search')}</button>
         <button class="icon-btn star ${isSaved ? 'on' : ''}" type="button" data-save aria-pressed="${!!isSaved}" aria-label="${esc(t(isSaved ? 'unsave_route' : 'save_route'))}" ${p.from && p.to ? '' : 'disabled'}>★</button>
@@ -81,7 +99,7 @@ function connectionHtml(c, ci) {
   const odds = (s) => (s.transfer?.runs ? `<p class="small transfer-odds ${s.transfer.worked * 5 >= s.transfer.runs * 4 ? '' : 'late'}">${esc(t('transfer_odds', s.transfer.worked, s.transfer.runs))}</p>` : '');
   const segs = c.segments.map((s, si) => `
     <li class="seg">${si ? odds(s) : ''}
-      <div class="seg-line">${plate(lineNumber(s.line) || '·')}<span class="hint small">${esc(s.operatorName)}</span></div>
+      <div class="seg-line">${kindPlate(s.line, lineKind(s.line, s.group, s.vehicle))}<span class="hint small">${esc(s.operatorName)}</span></div>
       <div class="seg-stops">
         <button class="seg-stop" data-stop="${ci}:${si}:dep"><b>${esc(s.departureTime)}</b> ${esc(readableStop(s.departureStop))}${s.departurePlatform ? ` <span class="pf">${esc(t('platform', s.departurePlatform))}</span>` : ''}</button>
         <button class="seg-stop" data-stop="${ci}:${si}:arr"><b>${esc(s.arrivalTime)}</b> ${esc(readableStop(s.arrivalStop))}${s.arrivalPlatform ? ` <span class="pf">${esc(t('platform', s.arrivalPlatform))}</span>` : ''}</button>
@@ -90,13 +108,22 @@ function connectionHtml(c, ci) {
       ${s.routeUrl ? `<button class="text-btn" data-trip="${ci}:${si}">${t('show_stops')}</button>` : ''}
     </li>`).join('');
   const saved = savedJourneys().some((j) => sameJourney(j.connection, c));
+  const kinds = [...new Set(c.segments.map((s) => lineKind(s.line, s.group, s.vehicle)))].slice(0, 3);
+  const fare = fareNote(c);
+  const walk = (w) => (w ? `<p class="walk-row small">${esc(t('walk_to', w.minutes, readableStop(w.stop)))}<span>${esc(w.arrivalTime)}</span></p>` : '');
+  // EM-0116: a followed journey says so, in its own colour.
+  const legs = c.segments.filter((s) => s.routeUrl);
+  const followed = legs.length > 1 && isFollowed(plannerLeg(legs[0]).ref);
   return `<li class="connection">
-    <div class="conn-head"><span class="conn-times">${esc(c.departureTime)} – ${esc(c.arrivalTime)}</span><span class="hint">${esc(c.totalDuration)}</span>
+    <div class="conn-head"><span class="conn-kinds">${kinds.map((k) => kindIcon(k, 26)).join('')}</span>
+      <span class="conn-main"><span class="conn-times">${esc(c.departureTime)} – ${esc(c.arrivalTime)}</span>
+        <span class="hint">${esc([c.totalDuration, fare.price].filter(Boolean).join('  ·  '))}</span></span>
       <button class="icon-btn star ${saved ? 'on' : ''}" data-save-journey="${ci}" aria-pressed="${saved}" aria-label="${esc(t(saved ? 'unsave_journey' : 'save_journey'))}">★</button>
       <button class="icon-btn" data-repeat="${ci}" aria-label="${esc(t('rides_repeat'))}">↻</button>
       <button class="icon-btn" data-share="${ci}" aria-label="${esc(t('share'))}">⤴</button></div>
-    <ol class="segs">${segs}</ol>
-    ${c.segments.filter((s) => s.routeUrl).length > 1 ? `<button class="btn wide" data-journey="${ci}">${t('journey_follow')}</button>` : ''}</li>`;
+    ${fare.warning ? `<div class="notice warn small">${esc(fare.warning)}</div>` : ''}
+    ${walk(c.walkBefore)}<ol class="segs">${segs}</ol>${walk(c.walkAfter)}
+    ${legs.length > 1 ? (followed ? `<button class="btn wide tonal" disabled>${t('journey_following')}</button>` : `<button class="btn wide soft" data-journey="${ci}">${t('journey_follow')}</button>`) : ''}</li>`;
 }
 
 const shareText = (c) => `${c.departureTime} – ${c.arrivalTime} (${c.totalDuration})\n` +
@@ -114,7 +141,7 @@ function bind(el) {
       const list = await apiJson(`/api/cp/suggest?city=${p.city}&q=${encodeURIComponent(input.value)}`).catch(() => []);
       if (document.activeElement !== input) return;
       active = { input, which, list };
-      sug.innerHTML = list.map((s, i) => `<li role="option"><button type="button" data-sug="${i}">${esc(s.text)}${s.description ? `<small>${esc(s.description)}</small>` : ''}</button></li>`).join('');
+      sug.innerHTML = list.map((s, i) => `<li role="option"><button type="button" data-sug="${i}">${esc(s.text)}${s.town ? `<small>${esc(t('town_whole'))}</small>` : s.description ? `<small>${esc(s.description)}</small>` : ''}</button></li>`).join('');
       sug.dataset.which = which;
       sug.hidden = !list.length;
     }, 250);
@@ -131,6 +158,7 @@ function bind(el) {
     p[active.which + 'Sug'] = s;
     sug.hidden = true;
     (active.which === 'from' ? to : null)?.focus();
+    askAhead();
   };
   [from, to].forEach((i) => (i.onblur = () => setTimeout(() => (sug.hidden = true), 150)));
   // EM-0070: iOS reports every turn of the time and date wheels as a change while the picker is open; redrawing the form
@@ -151,13 +179,25 @@ function bind(el) {
   if (arrive) arrive.onchange = (e) => { p.arrive = e.target.checked; renderPlanner(root); };
   $('form', el).onsubmit = (e) => { e.preventDefault(); search(); };
   // Hold (a long press is a context menu on phones) or right-click a place: set it from To.
-  el.querySelectorAll('[data-place]').forEach((b) => (b.oncontextmenu = (e) => { e.preventDefault(); setPlace(b.dataset.place); }));
+  // EM-0108: it opens a stop search to choose the place (it took whatever To had, unseen).
+  el.querySelectorAll('[data-place]').forEach((b) => (b.oncontextmenu = (e) => { e.preventDefault(); pickPlace(b.dataset.place); }));
   el.onclick = (e) => {
     if (e.target.closest('[data-swap]')) {
       [p.from, p.to, p.fromSug, p.toSug] = [p.to, p.from, p.toSug, p.fromSug];
+      askAhead();
       return renderPlanner(root);
     }
     if (e.target.closest('[data-now]')) { p.time = ''; p.date = ''; return renderPlanner(root); }
+    const mode = e.target.closest('[data-mode]');
+    if (mode) {
+      const m = mode.dataset.mode, now = modes();
+      const next = now.includes(m) ? now.filter((x) => x !== m) : [...now, m];
+      if (!next.length) return;
+      store.set('plannerModes', next);
+      if (p.results.length || p.searched) return search();
+      askAhead();
+      return renderPlanner(root);
+    }
     if (e.target.closest('[data-missing]')) return openSubmit('trip', { from: p.fromSug, to: p.toSug });
     const place = e.target.closest('[data-place]');
     if (place) return goPlace(place.dataset.place);
@@ -199,7 +239,8 @@ function bind(el) {
       const legs = p.results[Number(journey.dataset.journey)].segments.filter((s) => s.routeUrl)
         .map(plannerLeg);
       startJourney(legs);
-      return toast(t('journey_started'));
+      toast(t('journey_started'));
+      return renderBody();
     }
     const trip = e.target.closest('[data-trip]');
     if (trip) {
@@ -221,7 +262,7 @@ function bind(el) {
  */
 function goPlace(kind) {
   const pl = store.get('place_' + kind, null);
-  if (!pl) return setPlace(kind);
+  if (!pl) return pickPlace(kind);
   Object.assign(p, { to: pl.text, toSug: pl, time: '', date: '', arrive: false });
   if (!navigator.geolocation) return renderPlanner(root);
   navigator.geolocation.getCurrentPosition(async (pos) => {
@@ -231,12 +272,45 @@ function goPlace(kind) {
     search();
   }, () => { toast(t('place_no_location')); renderPlanner(root); }, { maximumAge: 60000, timeout: 15000 });
 }
-function setPlace(kind) {
-  const to = p.toSug && p.toSug.text === p.to.trim() ? p.toSug : null;
-  if (!to && (!store.get('place_' + kind, null) || p.to.trim())) return toast(t('place_set_hint', t('place_' + kind)));
-  store.set('place_' + kind, to);
-  toast(to ? t('place_saved', t('place_' + kind), readableStop(to.text)) : t('place_cleared', t('place_' + kind)));
-  renderPlanner(root);
+/** EM-0108: the stop itself, not the town every place starts with ("Banská Bystrica, …"). */
+const placeName = (pl) => { const i = pl.text.indexOf(', '); return i >= 0 ? pl.text.slice(i + 2) : pl.text; };
+
+/** EM-0108: Home or Work chosen by searching for its stop (the whole name shown), or forgotten. */
+function pickPlace(kind) {
+  const name = t('place_' + kind), current = store.get('place_' + kind, null);
+  const d = document.createElement('div');
+  d.className = 'dialog-backdrop';
+  d.innerHTML = `<div class="dialog stack" role="dialog" aria-modal="true" aria-labelledby="place-title">
+    <h2 id="place-title">${esc(t('place_pick_title', name))}</h2>
+    ${current ? `<p class="hint small">${esc(t('place_pick_now', current.text))}</p>` : ''}
+    <label class="field">${t('place_pick_search')}<input id="place-q" autocomplete="off"></label>
+    <ul class="list" id="place-list"></ul>
+    <div class="dialog-actions">${current ? `<button type="button" class="text-btn danger" data-clear>${t('place_pick_clear')}</button>` : ''}
+      <button type="button" class="text-btn" data-cancel>${t('cancel')}</button></div></div>`;
+  let found = [], timer = null;
+  const done = (pl) => {
+    store.set('place_' + kind, pl);
+    toast(pl ? t('place_saved', name, placeName(pl)) : t('place_cleared', name));
+    d.remove();
+    renderPlanner(root);
+  };
+  $('#place-q', d).oninput = (e) => {
+    clearTimeout(timer);
+    const q = e.target.value.trim();
+    if (q.length < 2) { $('#place-list', d).innerHTML = ''; return; }
+    timer = setTimeout(async () => {
+      found = await apiJson(`/api/cp/suggest?q=${encodeURIComponent(q)}`).catch(() => []);
+      $('#place-list', d).innerHTML = found.map((s, i) => `<li><button type="button" class="row link" data-pick="${i}"><span class="row-text"><span class="row-title">${esc(s.text)}</span></span></button></li>`).join('');
+    }, 300);
+  };
+  d.onclick = (e) => {
+    if (e.target === d || e.target.closest('[data-cancel]')) return d.remove();
+    if (e.target.closest('[data-clear]')) return done(null);
+    const pick = e.target.closest('[data-pick]');
+    if (pick) done(found[Number(pick.dataset.pick)]);
+  };
+  document.body.appendChild(d);
+  $('#place-q', d).focus();
 }
 
 function toggleSaved() {
@@ -246,13 +320,49 @@ function toggleSaved() {
   renderPlanner(root);
 }
 
+/** What a search asks the server, also when asked ahead. */
+const query = () => ({
+  city: p.city, from: p.from.trim(), to: p.to.trim(), fromSug: p.fromSug, toSug: p.toSug, time: p.time, date: cpDate(p.date), directOnly: p.direct,
+  arriveBy: p.arrive && !!p.time, modes: modes().join(','), walkOther: store.get('walkOther', true),
+});
+
+/** 2.18.0: once both stops are chosen the server is asked right away, so Search shows the answer it already has. */
+function askAhead() {
+  if (p.fromSug && p.toSug && p.from.trim() && p.to.trim()) apiJson('/api/cp/search', query()).catch(() => {});
+}
+
+/**
+ * 2.18.0: { price, warning } of a connection with the transport cards: the price in the rider's category (from the
+ * accounts), a warning when a credit won't cover it. Buses paid by bank card (Reminders settings) give no warning.
+ */
+function fareNote(c) {
+  if (!tariffs) return {};
+  const { card, ids } = accounts() || {};
+  const now = Date.now();
+  const ms = (v) => (!v ? 0 : v < 1e12 ? v * 1000 : v);
+  const passes = (ids?.tickets || []).filter((x) => x.valid && x.validToMs > now);
+  const cityPass = ms(card?.ticketValidTo) > now;
+  const category = fareCategory([card?.cardTypeName || '', ...(ids?.tickets || []).map((x) => x.name)]);
+  // ponytail: any valid IDS BBSK season ticket counts as covering the regional buses (a Sieťovka does; a Časovka
+  // only its zones), and a valid SAD Zvolen one as covering both cities. Same as the Android app.
+  const cost = journeyCost(tariffs, c.segments, category, cityPass, passes.length > 0);
+  const total = cost.sadzvCents + cost.idsCents;
+  let price = total === 0 && cost.covered ? t('fare_covered') : total === 0 ? '' : cost.unknown ? t('fare_from', money(total / 100)) : money(total / 100);
+  if (price && cost.train) price = t('fare_plus_train', price);
+  const short = (name, credit, cents, bank) => (!bank && credit != null && cents > Math.round(credit * 100)
+    ? t('fare_short', name, money(credit), money(cents / 100)) : '');
+  const warning = [short('SAD Zvolen', card?.creditLastBalance ?? null, cost.sadzvCents, store.get('bankCardCity', false)),
+    short('IDS BBSK', ids?.credit ?? null, cost.idsCents, store.get('bankCardRegion', false))].filter(Boolean).join('\n');
+  return { price, warning };
+}
+
 async function search() {
   if (!p.from.trim() || !p.to.trim()) return;
   Object.assign(p, { loading: true, error: '', results: [], cursor: null, searched: true });
   renderPlanner(root);
   try {
     const r = await apiJson('/api/cp/search', {
-      city: p.city, from: p.from.trim(), to: p.to.trim(), fromSug: p.fromSug, toSug: p.toSug, time: p.time, date: cpDate(p.date), directOnly: p.direct, arriveBy: p.arrive && !!p.time,
+      ...query(),
     });
     Object.assign(p, { results: r.connections, cursor: r.cursor, fromSug: r.from, toSug: r.to, rainy: !!r.rainy });
     p.searchedRoute = { city: p.city, from: r.from.text, to: r.to.text, fromSug: r.from, toSug: r.to };

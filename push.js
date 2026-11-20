@@ -33,6 +33,8 @@ export const vapidPublicKey = () => vapid().publicKey;
 const TEXT = {
   en: {
     arriving: (line, stop, min) => [`Bus ${line} arrives in ${min} min`, `Get ready at ${stop}.`],
+    // EM-0112: a bus followed by the timetable only: its time, and it may be late.
+    arrivingTimetable: (line, stop, min) => [`Bus ${line} arrives in ${min} min`, `By the timetable; the bus may be late. Get ready at ${stop}.`],
     alight: (stop) => ['Get off at the next stop', `Next stop: ${stop}`],
     arrived: (stop) => ['You’ve arrived', `The bus reached ${stop}. Following has stopped.`],
     change: (line, stop) => [`Change to bus ${line}`, `Get off at ${stop}. Now following your next bus.`],
@@ -41,6 +43,7 @@ const TEXT = {
   },
   sk: {
     arriving: (line, stop, min) => [`Autobus ${line} príde o ${min} min`, `Pripravte sa na zastávke ${stop}.`],
+    arrivingTimetable: (line, stop, min) => [`Autobus ${line} príde o ${min} min`, `Podľa cestovného poriadku, autobus môže meškať. Pripravte sa na zastávke ${stop}.`],
     alight: (stop) => ['Vystupujete na ďalšej zastávke', `Ďalšia zastávka: ${stop}`],
     arrived: (stop) => ['Ste v cieli', `Autobus dorazil na zastávku ${stop}. Sledovanie skončilo.`],
     change: (line, stop) => [`Prestúpte na autobus ${line}`, `Vystúpte na zastávke ${stop}. Teraz sledujeme ďalší autobus.`],
@@ -122,7 +125,7 @@ async function tick() {
       const lead = f.arriveLeadMinutes || 2; // the rider's choice (Reminders)
       if (!p.onBoard && p.secondsToBoarding >= 0 && p.secondsToBoarding <= lead * 60) {
         const min = Math.min(lead, Math.max(1, Math.round(p.secondsToBoarding / 60)));
-        await send(f, 'arriving', t.arriving(f.ref.line, p.boardingStopName, min));
+        await send(f, 'arriving', (detail.delaySeconds == null ? t.arrivingTimetable : t.arriving)(f.ref.line, p.boardingStopName, min));
       }
       if (p.onBoard && p.nextIsAlight) await send(f, 'alight', t.alight(p.alightStopName));
     } catch {
