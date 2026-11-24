@@ -1,6 +1,6 @@
 // Service worker: caches the app shell so the PWA launches offline, and shows
 // "follow this bus" push alerts. API requests (/api/*) are always network.
-const CACHE = 'testem-shell-v53-2.18.0';
+const CACHE = 'testem-shell-v56-2.18.3';
 const SHELL = [
   '/',
   '/index.html',

@@ -1,7 +1,7 @@
 // Shared helpers for the web client: DOM, storage, API, formatting, sheets, logs.
 import { t, lang } from './i18n.js';
 
-export const VERSION = '2.18.0';
+export const VERSION = '2.18.3';
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -116,13 +116,71 @@ function overlay(id, cls, title, onClose) {
   el.id = id;
   el.className = cls;
   el.innerHTML = `<div class="${cls}-panel" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      ${cls === 'sheet' ? '<div class="sheet-grab" aria-hidden="true"></div>' : ''}
       <header class="${cls}-head"><button class="icon-btn" data-close aria-label="${esc(t(cls === 'page' ? 'back' : 'close'))}">${cls === 'page' ? '‹' : '✕'}</button><h2>${esc(title)}</h2></header>
       <div class="${cls}-body"></div></div>`;
   el._onClose = onClose;
   el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-close]')) closeOverlay(id); });
   document.body.appendChild(el);
   $('[data-close]', el).focus({ preventScroll: true });
+  // Touch screens only: with a mouse the sheet stays as it was (opens tall, its content scrolls with the wheel).
+  if (cls === 'sheet' && matchMedia('(pointer: coarse)').matches) dragSheet(el, id);
   return $(`.${cls}-body`, el);
+}
+
+/**
+ * EM-0123: the sheet behaves like Android's. It opens at about half the screen; dragging it up (by its top, or by its
+ * content while that can't scroll yet) opens it fully, dragging it down closes it or brings it back to half. Inside,
+ * the content scrolls only once the sheet is fully open; at the top of the content, pulling down moves the sheet again.
+ */
+function dragSheet(el, id) {
+  const panel = $('.sheet-panel', el), body = $('.sheet-body', el);
+  const half = () => innerHeight * 0.55, full = () => innerHeight * 0.92;
+  let open = 'half', start = null;
+  const setMax = (px, settle) => {
+    panel.classList.toggle('settling', settle);
+    panel.style.maxHeight = `${px}px`;
+  };
+  setMax(half(), false);
+  body.style.overflowY = 'hidden';
+  const snap = (to) => {
+    open = to;
+    setMax(to === 'full' ? full() : half(), true);
+    body.style.overflowY = to === 'full' ? 'auto' : 'hidden';
+    if (to === 'half') body.scrollTop = 0; // EM-0124: half open, its top (the Follow button) shows
+  };
+  panel.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    const onBody = body.contains(e.target);
+    // Fully open with scrolled content: the content scrolls as usual.
+    if (onBody && open === 'full' && body.scrollTop > 0) { start = null; return; }
+    start = { y: e.touches[0].clientY, h: panel.getBoundingClientRect().height, onBody, moved: false, t: Date.now() };
+  }, { passive: true });
+  panel.addEventListener('touchmove', (e) => {
+    if (!start) return;
+    const dy = e.touches[0].clientY - start.y;
+    // Fully open, on the content, pulling up: that's a scroll, not a drag.
+    if (start.onBody && open === 'full' && dy < 0 && !start.moved) { start = null; return; }
+    if (!start.moved && Math.abs(dy) < 6) return;
+    start.moved = true;
+    e.preventDefault();
+    panel.classList.remove('settling');
+    const h = Math.min(full(), start.h - dy);
+    panel.style.maxHeight = `${Math.max(0, h)}px`;
+    panel.style.height = `${Math.max(0, h)}px`;
+  }, { passive: false });
+  panel.addEventListener('touchend', (e) => {
+    if (!start?.moved) { start = null; return; }
+    const dy = e.changedTouches[0].clientY - start.y, speed = dy / Math.max(1, Date.now() - start.t); // px per ms, + down
+    const h = start.h - dy;
+    start = null;
+    panel.style.height = '';
+    if (speed > 0.6 || h < half() * 0.6) {
+      // Down and away: it slides off, then closes.
+      panel.classList.add('settling', 'leaving');
+      setTimeout(() => closeOverlay(id), 220);
+    } else snap(speed < -0.4 || h > (half() + full()) / 2 ? 'full' : 'half');
+  });
 }
 export const openSheet = (title, onClose) => overlay('sheet', 'sheet', title, onClose);
 export const openPage = (title, onClose) => overlay('page', 'page', title, onClose);

@@ -51,7 +51,7 @@ const en = {
   lock_title: 'Enter your PIN', lock_wrong: 'Wrong PIN. %1 tries left.', lock_wait: 'Too many tries. Wait %1 s.', unlock: 'Unlock', lock_forgot: "Forgot PIN? Remove the account",
   ticket_ready: 'Ticket ready', ticket_refresh_in: 'New code in %1 s', ticket_connecting: 'Connecting…', ticket_reconnecting: 'Session expired, reconnecting…',
   ticket_offline: 'No connection. Code from %1, %2 min old. It may be rejected.', ticket_offline_no_code: 'Waiting for the network to get your code.',
-  ticket_no_card: 'No card on this account. Add one on sadzv.qrbus.me, then refresh.', ticket_retry: 'No ticket available, retrying…', ticket_loading: 'Loading ticket…',
+  ticket_no_card: 'No card on this account. Add one on sadzv.qrbus.me, then refresh.', ticket_retry: 'No ticket available, retrying…', ticket_loading: 'Loading ticket…', loading: 'Loading…',
   ticket_fullscreen: 'Show full screen', ticket_fullscreen_close: 'Tap anywhere to close', ticket_signed_out: 'The server no longer accepts your saved password.',
   ticket_valid_until: 'Valid until %1', ticket_card: 'Card', ticket_next_from: 'Next from %1', ticket_next_hint: 'Star a stop in Departures to see its next buses here.',
   low_credit: 'Low credit: %1 left', expires_soon: '%1 expires in %2', expired: '%1 has expired',
@@ -111,6 +111,7 @@ const en = {
   bug_category: 'What is it about?', cat_crash: 'Crash', cat_ticket: 'Ticket', cat_departures: 'Departures', cat_planner: 'Planner', cat_tracking: 'Following a bus', cat_account: 'Account', cat_other: 'Other',
   bug_summary: 'Short summary', bug_description: 'What happened, and what did you expect?', bug_name: 'Name', bug_email: 'Email for our reply', bug_email_hint: 'Optional. Leave it empty if you don’t want a reply.',
   bug_images: 'Screenshots or photos', bug_images_hint: 'Up to 5, e.g. a screenshot with what you mean marked on it. Location and other photo details are removed.',
+  bug_video: 'Video', bug_video_hint: 'One, up to 50 MB, e.g. a screen recording of the problem. Where it was filmed is removed.', bug_video_big: 'The video is larger than 50 MB. Send a shorter one.',
   bug_logs: 'Attach app logs', bug_logs_hint: 'Recent log lines from this app and your browser details. Passwords are removed.', bug_logs_show: 'Show what will be sent',
   bug_consent: 'I agree that this report, the name and email above, browser details, app version and (if attached) the logs and images are sent to the Plan&Ride developer to fix the bug and reply to me.',
   bug_send: 'Send report', bug_sending: 'Sending…', bug_sent: 'Report %1 sent. If you left an email, a confirmation is on its way.', bug_failed: 'Couldn’t send the report: %1', bug_off: 'Bug reports aren’t set up on this server.',
@@ -281,7 +282,7 @@ const sk = {
   lock_title: 'Zadajte PIN', lock_wrong: 'Nesprávny PIN. Zostáva %1 pokusov.', lock_wait: 'Príliš veľa pokusov. Počkajte %1 s.', unlock: 'Odomknúť', lock_forgot: "Zabudli ste PIN? Odstrániť účet",
   ticket_ready: 'Lístok je pripravený', ticket_refresh_in: 'Nový kód o %1 s', ticket_connecting: 'Pripája sa…', ticket_reconnecting: 'Relácia vypršala, znova sa pripája…',
   ticket_offline: 'Bez pripojenia. Kód z %1, starý %2 min. Môže byť odmietnutý.', ticket_offline_no_code: 'Čaká sa na sieť, aby sme získali váš kód.',
-  ticket_no_card: 'Na účte nie je karta. Pridajte ju na sadzv.qrbus.me a obnovte.', ticket_retry: 'Lístok nie je dostupný, skúšame znova…', ticket_loading: 'Načítava sa lístok…',
+  ticket_no_card: 'Na účte nie je karta. Pridajte ju na sadzv.qrbus.me a obnovte.', ticket_retry: 'Lístok nie je dostupný, skúšame znova…', ticket_loading: 'Načítava sa lístok…', loading: 'Načítava sa…',
   ticket_fullscreen: 'Na celú obrazovku', ticket_fullscreen_close: 'Ťuknutím zatvoríte', ticket_signed_out: 'Server už neprijíma uložené heslo.',
   ticket_valid_until: 'Platí do %1', ticket_card: 'Karta', ticket_next_from: 'Najbližšie z %1', ticket_next_hint: 'Označte zastávku hviezdičkou v Odchodoch a uvidíte tu jej spoje.',
   low_credit: 'Nízky kredit: zostáva %1', expires_soon: '%1 vyprší o %2', expired: '%1 vypršal',
@@ -341,6 +342,7 @@ const sk = {
   bug_category: 'Čoho sa to týka?', cat_crash: 'Pád aplikácie', cat_ticket: 'Lístok', cat_departures: 'Odchody', cat_planner: 'Vyhľadávač', cat_tracking: 'Sledovanie spoja', cat_account: 'Účet', cat_other: 'Iné',
   bug_summary: 'Krátky popis', bug_description: 'Čo sa stalo a čo ste čakali?', bug_name: 'Meno', bug_email: 'E-mail pre odpoveď', bug_email_hint: 'Nepovinné. Nechajte prázdne, ak odpoveď nechcete.',
   bug_images: 'Snímky obrazovky alebo fotky', bug_images_hint: 'Najviac 5, napr. snímka obrazovky s vyznačeným miestom. Poloha a ďalšie údaje fotky sa odstránia.',
+  bug_video: 'Video', bug_video_hint: 'Jedno, najviac 50 MB, napr. záznam obrazovky s problémom. Miesto, kde bolo nakrútené, sa odstráni.', bug_video_big: 'Video má viac ako 50 MB. Pošlite kratšie.',
   bug_logs: 'Priložiť záznamy aplikácie', bug_logs_hint: 'Posledné riadky záznamu tejto aplikácie a údaje o prehliadači. Heslá sú odstránené.', bug_logs_show: 'Zobraziť, čo sa odošle',
   bug_consent: 'Súhlasím, že toto hlásenie, meno a e-mail vyššie, údaje o prehliadači, verzia aplikácie a (ak sú priložené) záznamy a obrázky sa odošlú vývojárovi Plan&Ride na opravu chyby a odpoveď.',
   bug_send: 'Odoslať hlásenie', bug_sending: 'Odosiela sa…', bug_sent: 'Hlásenie %1 odoslané. Ak ste zadali e-mail, príde vám potvrdenie.', bug_failed: 'Hlásenie sa nepodarilo odoslať: %1', bug_off: 'Hlásenie chýb nie je na tomto serveri nastavené.',
@@ -469,6 +471,9 @@ export function setLang(code) {
   try { localStorage.setItem('testem.lang', current); } catch { /* ignore */ }
   document.documentElement.lang = current;
 }
+/** EM-0122: something loading, in the middle of its space: a bigger spinner and the word. */
+export const loadingHtml = () => `<div class="loading" role="status"><span class="spinner"></span><span>${t('loading')}</span></div>`;
+
 export function t(key, ...args) {
   const text = tables[current][key] ?? en[key] ?? key;
   return args.reduce((s, a, i) => s.replaceAll(`%${i + 1}`, a), text);

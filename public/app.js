@@ -1,6 +1,6 @@
 // Plan&Ride web version (testEM internally): entry point. Home, account, history, settings,
 // PIN lock, bug reports and suggestions. The account is optional, like in the Android app.
-import { t, lang, setLang, applyI18n } from './js/i18n.js';
+import { t, lang, setLang, applyI18n, loadingHtml } from './js/i18n.js';
 import { $, $$, esc, api, apiJson, store, config, loadConfig, clock, dateText, money, toMs, toast, openPage, closeOverlay, switchRow, collectLogs, log, plate, countdown, VERSION } from './js/core.js';
 import { historyInsights, historyToCsv, nextRideDeparture, pickRideConnection, readableStop, lineNumber, todayLocal, walletForLine } from './js/logic.js';
 import * as live from './js/live.js';
@@ -855,7 +855,7 @@ async function renderHistory(el) {
   el.innerHTML = `<header class="screen-head"><h1>${t('history_title')}</h1>
     <span><button class="text-btn" data-csv ${items.length ? '' : 'disabled'}>${t('export_csv')}</button><button class="text-btn" data-reload>${t('refresh')}</button></span></header>
     ${both() ? `<div class="segmented" role="radiogroup">${[[null, t('wallet_both')], ['sadzv', 'SAD Zvolen'], ['ids', 'IDS BBSK']].map(([w, label]) => `<button role="radio" aria-checked="${w === which}" data-hist="${w ?? ''}">${esc(label)}</button>`).join('')}</div>` : ''}
-    <div id="hist-body">${s.history || !hasSadzv() ? '' : '<p class="hint"><span class="spinner"></span></p>'}</div>`;
+    <div id="hist-body">${s.history || !hasSadzv() ? '' : loadingHtml()}</div>`;
   el.onclick = (e) => {
     if (e.target.closest('[data-reload]')) { s.history = null; refreshIds(); renderHistory(el); }
     if (e.target.closest('[data-csv]')) exportCsv();
@@ -961,7 +961,7 @@ function idsAccountHtml() {
 /** Credit top-up (SAD Zvolen): the amount here, the payment on the carrier's gateway; the money never goes through us. */
 async function openTopUp() {
   const body = openPage(t('topup_title'));
-  body.innerHTML = '<p class="hint pad"><span class="spinner"></span></p>';
+  body.innerHTML = loadingHtml();
   const r = await api('/api/topup/limits', { sessionId: s.sessionId });
   if (!r.ok) { body.innerHTML = `<div class="notice error">${t('topup_error')}</div>`; return; }
   const { tariffId, minCents, maxCents, defaultCents } = r.json;
@@ -1397,6 +1397,7 @@ function bugReport(body, feature = false) {
     <label class="field">${t('bug_email')}<input name="email" type="email" maxlength="200" value="${esc(email)}" autocomplete="email"><small class="hint">${t('bug_email_hint')}</small></label>
     <div class="notice warn" id="no-email" ${email || feature ? 'hidden' : ''}>${t('bug_no_email')}</div>
     <label class="field">${t('bug_images')}<input type="file" name="images" accept="image/*" multiple><small class="hint">${t('bug_images_hint')}</small></label>
+    <label class="field">${t('bug_video')}<input type="file" name="video" accept="video/mp4,video/quicktime"><small class="hint">${t('bug_video_hint')}</small></label>
     ${feature ? '' : `<ul class="list">${switchRow('attach-logs', t('bug_logs'), t('bug_logs_hint'), true)}</ul>
     <details><summary>${t('bug_logs_show')}</summary><pre class="logs">${esc(logs)}</pre></details>`}
     <label class="consent"><input type="checkbox" name="consent" required> <span>${t(feature ? 'feature_consent' : 'bug_consent')}</span></label>
@@ -1418,9 +1419,18 @@ function bugReport(body, feature = false) {
     send.textContent = t('bug_sending');
     try {
       const images = await Promise.all([...form.images.files].slice(0, 5).map(shrinkImage));
+      // One video, as it is (a browser can't shrink it): at most 50 MB; emHUB removes where it was filmed.
+      const clip = form.video.files[0];
+      if (clip && clip.size > 50e6) throw new Error(t('bug_video_big'));
+      const video = clip ? await new Promise((done, fail) => {
+        const reader = new FileReader();
+        reader.onload = () => done(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => fail(reader.error);
+        reader.readAsDataURL(clip);
+      }) : undefined;
       const r = await apiJson('/api/hub/bugs', {
         kind: feature ? 'feature' : 'bug', category: feature ? 'feature' : f.category, title: f.title.trim(), description: f.description.trim(), name: f.name.trim(), email: f.email.trim(),
-        appVersion: VERSION, device: navigator.userAgent, logs: withLogs() ? logs : '', consent: true, images, language: lang(), // emails in the reporter's language
+        appVersion: VERSION, device: navigator.userAgent, logs: withLogs() ? logs : '', consent: true, images, video, language: lang(), // emails in the reporter's language
       });
       closeOverlay('page');
       toast(t(feature ? 'feature_sent' : 'bug_sent', r.code));

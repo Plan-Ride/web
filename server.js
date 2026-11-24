@@ -533,8 +533,8 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 const app = express();
 app.disable('x-powered-by');
-// Bug reports carry logs and up to 3 photos; every other route keeps a small body limit.
-const smallJson = express.json({ limit: '1.5mb' }), bugJson = express.json({ limit: '16mb' });
+// Bug reports carry logs, up to 5 photos and a video (50 MB, base64); every other route keeps a small body limit.
+const smallJson = express.json({ limit: '1.5mb' }), bugJson = express.json({ limit: '80mb' });
 app.use((req, res, next) => (req.path === '/api/hub/bugs' ? bugJson : smallJson)(req, res, next));
 
 // Security headers. Scripts only from this server; inline styles are used for bar heights etc.
@@ -842,7 +842,7 @@ const clientIp = (req) => {
 };
 
 app.post('/api/hub/bugs', wrap((req) =>
-  hubRequest('bugs', { method: 'POST', body: { ...req.body, platform: 'web' }, clientIp: clientIp(req), timeout: 60000 })));
+  hubRequest('bugs', { method: 'POST', body: { ...req.body, platform: 'web' }, clientIp: clientIp(req), timeout: 180000 })));
 app.post('/api/hub/report', wrap((req) =>
   hubRequest('community/reports', { method: 'POST', body: { ...req.body, platform: 'web' }, clientIp: clientIp(req) })));
 app.get('/api/hub/delay', wrap((req) =>

@@ -1,5 +1,5 @@
 // Departures, stop boards, trip sheet and "follow this bus" for the web client.
-import { t, lang } from './i18n.js';
+import { t, lang, loadingHtml } from './i18n.js';
 import { $, $$, esc, api, apiJson, store, config, clock, countdown, delayChip, delayInfo, plate, kindIcon, kindPlate, toast, openSheet, openPage, closeOverlay, log } from './core.js';
 import { openSubmit } from './submit.js';
 import { tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
@@ -178,7 +178,7 @@ function renderBoard() {
     <header class="screen-head board-head"><button class="icon-btn" data-back aria-label="${esc(t('back'))}">‹</button><h1>${esc(b.stop.name)}</h1>
       <button class="icon-btn star ${fav ? 'on' : ''}" data-fav aria-pressed="${fav}" aria-label="★">${STAR(fav)}</button></header>
     <div id="follow-slot-board"></div>
-    ${b.loading ? `<p class="hint"><span class="spinner"></span></p>` : b.error && !b.departures.length
+    ${b.loading ? loadingHtml() : b.error && !b.departures.length
       ? `<div class="notice error">${t('board_failed')} <button class="text-btn" data-refresh>${t('retry')}</button></div>`
       : b.departures.length ? `<ul class="board">${rows}</ul>` : `<div class="empty"><p>${t('board_empty')}</p></div>`}
     ${b.updatedAt ? `<p class="hint small">${t('updated', clock(b.updatedAt))}</p>` : ''}
@@ -408,7 +408,7 @@ function enterShareCode() {
     const r = await api('/api/hub/shares/claim', { code, name });
     if (!r.ok) { err.textContent = t('share_code_wrong'); err.hidden = false; return; }
     const claim = r.json;
-    body.innerHTML = `<p>${esc(t('share_waiting', claim.label))}</p><p class="hint"><span class="spinner"></span></p>`;
+    body.innerHTML = `<p>${esc(t('share_waiting', claim.label))}</p>${loadingHtml()}`;
     const sock = shareSocket('claim', claim.claimId, claim.token, (s) => {
       if (s.type !== 'status' || s.status === 'asked') return;
       sock.close();
@@ -429,7 +429,7 @@ function enterShareCode() {
  */
 async function openBusMap(ref, detail, alightOrder) {
   const body = openPage(`${ref.line} → ${detail.destination || ref.destination}`);
-  body.innerHTML = '<p class="hint"><span class="spinner"></span></p>';
+  body.innerHTML = loadingHtml();
   const full = detail.stops.every((x) => x.lat != null) ? detail : await loadTrip(ref, { withCoordinates: true }).catch(() => null);
   const stops = (full?.stops || []).filter((x) => x.lat != null);
   if (stops.length < 2) { body.innerHTML = `<div class="empty"><p>${t('map_unavailable')}</p></div>`; return; }
@@ -530,7 +530,7 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
     : delayChip(detail?.delaySeconds);
   const statusLine = historyText(detail) ? `${status} ${historyHint(detail)}` : status;
   let timeline = '';
-  if (s.loading) timeline = '<p class="hint"><span class="spinner"></span></p>';
+  if (s.loading) timeline = loadingHtml();
   else if (s.error || !detail?.stops?.length) timeline = `<div class="empty"><p>${t('trip_unavailable')}</p></div>`;
   else {
     const p = tripProgress(detail, { boardingPlatformIds: s.boardingPlatformIds, alightOrder: alight });
@@ -574,7 +574,9 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
     renderTripSheet(body);
   };
   const next = $('.timeline li.next', body);
-  if (next && !body.dataset.scrolled) { body.dataset.scrolled = '1'; next.scrollIntoView({ block: 'center' }); }
+  // EM-0124: only where the stops can be scrolled by hand too: half open (touch screens) the sheet shows its top, the
+  // Follow button, and the stops scroll once it is pulled fully open.
+  if (next && !body.dataset.scrolled && getComputedStyle(body).overflowY !== 'hidden') { body.dataset.scrolled = '1'; next.scrollIntoView({ block: 'center' }); }
 }
 
 const ridersText = (n) => (n === 1 ? t('community_rider') : t('community_riders', n));
@@ -1195,11 +1197,49 @@ function othersHtml() {
   }).join('')}</ul></div>`;
 }
 
+/** "#1d4fb8" -> [h, s, l] (0-360, 0-1, 0-1). */
+function toHsl(hex) {
+  const n = parseInt(hex.replace('#', '').padEnd(6, '0').slice(0, 6), 16);
+  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map((v) => v / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  if (!d) return [0, 0, l];
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, d / (1 - Math.abs(2 * l - 1)), l];
+}
+const hsl = ([h, s, l]) => `hsl(${h.toFixed(1)} ${(s * 100).toFixed(1)}% ${(l * 100).toFixed(1)}%)`;
+const MOOD_MINUTES = 8;
+/**
+ * EM-0121: the followed bus's card is alive like the Android one: the theme's colour, a neighbouring hue and a deeper
+ * shade drift into each other (~10 s each way). Each minute late warms it toward amber and slows the drift, each minute
+ * early cools it toward teal and speeds it up, up to 8 minutes. Set on the slot (it stays while the card inside is
+ * redrawn every second), so the colour glides (CSS @property) and the drift keeps its place (a delay from the clock).
+ */
+function paintFollow(el) {
+  const d = follow && effectiveDetail(follow);
+  el.classList.toggle('follow-alive', !!d?.stops?.length);
+  if (!d?.stops?.length) return;
+  const tone = Math.max(-1, Math.min(1, Math.round((d.delaySeconds || 0) / 60) / MOOD_MINUTES));
+  let [h, sat, l] = toHsl(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1D4FB8');
+  if (tone) {
+    const turn = (((tone > 0 ? 35 : 175) - h + 540) % 360) - 180; // the shortest way round
+    h = (h + turn * 0.85 * Math.abs(tone) + 360) % 360;
+    sat = Math.max(sat, 0.35 * Math.abs(tone)); // a grey theme still shows it
+    if (tone > 0) l *= 1 - 0.18 * tone;
+  }
+  const speed = tone < 0 ? 1 - tone : 1 - 0.3 * tone, drift = 10 / speed;
+  el.style.setProperty('--mood', hsl([h, sat, l]));
+  el.style.setProperty('--mood2', hsl([(h + 26) % 360, sat, l]));
+  el.style.setProperty('--deep', hsl([h, sat, l * 0.72]));
+  el.style.setProperty('--drift', `${drift.toFixed(2)}s`);
+  el.style.setProperty('--drift-at', `${(-(Date.now() / 1000) % (2 * drift)).toFixed(2)}s`);
+}
+
 const slots = new Set();
 export function renderFollowSlot(el) {
   if (!el) return;
   slots.add(el);
   el.innerHTML = followCardHtml();
+  paintFollow(el);
   el.onclick = (e) => {
     const r = e.target.closest('[data-report]');
     if (r) return report(Number(r.dataset.report), !!r.dataset.leaving);
@@ -1224,6 +1264,7 @@ function renderAllFollowSlots() {
     if (!el.isConnected) { slots.delete(el); continue; }
     if (el.contains(document.activeElement) && document.activeElement.matches('input')) continue;
     el.innerHTML = followCardHtml();
+    paintFollow(el);
   }
 }
 

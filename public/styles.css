@@ -90,6 +90,8 @@ button { cursor: pointer; }
 .empty { padding: 28px 16px; color: var(--muted); text-align: center; }
 .empty h3 { color: var(--text); }
 .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); display: inline-block; vertical-align: middle; animation: spin 0.8s linear infinite; }
+.loading { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 48px 16px; min-height: 160px; color: var(--muted); font-size: 15px; }
+.loading .spinner { width: 34px; height: 34px; border-width: 3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* The route plate: line numbers, like the plate on the bus. */
@@ -217,6 +219,18 @@ input[type="color"] { width: 32px; height: 32px; border: 0; background: none; pa
 
 /* ---------- follow card: the bar mirrors the Android live notification */
 .follow { margin: 10px 16px; background: var(--surface); border-radius: 18px; padding: 14px 16px; border: 1.5px solid color-mix(in srgb, var(--accent) 40%, var(--line)); }
+/* EM-0121: the followed bus's living background (paintFollow in live.js): warmer when late, cooler when early. */
+@property --mood { syntax: '<color>'; inherits: true; initial-value: #1D4FB8; }
+@property --mood2 { syntax: '<color>'; inherits: true; initial-value: #1D4FB8; }
+@property --deep { syntax: '<color>'; inherits: true; initial-value: #153b8a; }
+.follow-alive { transition: --mood 1.5s, --mood2 1.5s, --deep 1.5s; }
+.follow-alive > .follow {
+  background: linear-gradient(115deg, color-mix(in srgb, var(--mood) 30%, var(--surface)), color-mix(in srgb, var(--deep) 16%, var(--surface)),
+    color-mix(in srgb, var(--mood2) 30%, var(--surface)), color-mix(in srgb, var(--mood) 22%, var(--surface))) 0 0 / 260% 260%;
+  border-color: color-mix(in srgb, var(--mood) 65%, var(--line));
+  animation: follow-drift var(--drift, 10s) ease-in-out var(--drift-at, 0s) infinite alternate;
+}
+@keyframes follow-drift { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
 .follow-top { display: flex; align-items: center; gap: 10px; }
 .follow-dest { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .follow-big { font: 700 26px/1 var(--display); color: var(--accent-text); }
@@ -253,6 +267,11 @@ input[type="color"] { width: 32px; height: 32px; border: 0; background: none; pa
 .sheet { position: fixed; inset: 0; z-index: 40; background: rgba(4, 10, 24, 0.55); display: flex; align-items: flex-end; justify-content: center; }
 .sheet-panel { width: 100%; max-width: 560px; max-height: 88dvh; background: var(--surface); border-radius: 22px 22px 0 0; display: flex; flex-direction: column; padding-bottom: var(--safe-bottom); animation: rise 0.2s ease-out; }
 @keyframes rise { from { transform: translateY(24px); opacity: 0.6; } }
+/* EM-0123: the handle to drag the sheet by (dragSheet in core.js), and its settling into place. */
+.sheet-grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 8px auto 0; flex: none; }
+.sheet-panel.settling { transition: max-height 0.25s ease-out, transform 0.22s ease-in; }
+.sheet-panel.leaving { transform: translateY(100%); }
+.sheet-head { touch-action: none; }
 .sheet-head, .page-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
 .sheet-head h2, .page-head h2 { font-size: 20px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet-head .icon-btn { order: 2; border: 0; background: var(--surface-2); }
