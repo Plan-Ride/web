@@ -362,7 +362,7 @@ function shareTrip(trip, destination) {
   render();
   body.onclick = async (e) => {
     if (e.target.closest('[data-link]')) {
-      const text = t('share_trip_text', trip.ref.line, destination, 'https://par.karafa.net/f?t=' + sharePayload(trip));
+      const text = t('share_trip_text', trip.ref.line, destination, 'https://app.par.karafa.net/f?t=' + sharePayload(trip));
       if (navigator.share) return navigator.share({ text }).catch(() => {});
       await navigator.clipboard?.writeText(text).catch(() => {});
       return toast(t('share_copied'));

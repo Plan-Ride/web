@@ -899,6 +899,26 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
+// 2.18.5: a shared ride (app.par.karafa.net/f?t=...). On Android with Plan&Ride installed the app opens it (App Links,
+// verified with the file below); anywhere else the web version shows its bus.
+app.get('/f', (req, res) => {
+  const t = String(req.query.t || '');
+  if (!/^[A-Za-z0-9_-]{1,3000}$/.test(t)) return res.status(404).type('text').send("This shared bus can't be opened.");
+  res.redirect(302, '/?follow=' + t);
+});
+// The Android app's signing certificates (SHA-256): the three from Play Console (app signing and upload keys), and the
+// key builds from the team's computer are signed with (the open day demo phones).
+const APP_CERTS = [
+  'F3:FD:B9:E8:A6:22:ED:94:6E:66:08:55:B1:3E:E6:D3:1E:87:5B:EE:C3:2B:04:58:A0:1B:F9:E7:10:98:AC:6B',
+  'F7:31:02:25:C5:6F:3C:CA:D3:67:11:EC:3C:6B:2C:CF:79:7F:25:B2:97:4F:3C:01:4D:E4:1F:38:00:9F:5A:FA',
+  '8B:D4:13:A3:90:62:0C:E7:68:72:4C:29:17:A6:73:71:F8:E8:9F:5A:88:F9:C8:E1:C9:4A:8C:46:AE:7C:3F:5D',
+  '1F:28:6B:2E:70:27:60:C2:23:62:70:85:85:40:38:5A:01:2D:8E:80:CD:34:BF:7E:35:CE:EF:90:E2:D1:DA:F2',
+];
+app.get('/.well-known/assetlinks.json', (req, res) => res.json([{
+  relation: ['delegate_permission/common.handle_all_urls'],
+  target: { namespace: 'android_app', package_name: 'com.ksjd.testem', sha256_cert_fingerprints: APP_CERTS },
+}]));
+
 // Static PWA assets.
 app.use(
   express.static(path.join(__dirname, 'public'), {

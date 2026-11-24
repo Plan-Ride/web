@@ -135,6 +135,53 @@ async function decryptCreds(pin) {
   } catch { return null; }
 }
 const hasPin = () => !!store.get('credsEnc');
+
+// ---- EM-0125: Face ID or a fingerprint (a passkey) instead of typing the PIN
+// The passkey's PRF extension gives a secret only that passkey gives, and only after Face ID: it encrypts a copy of the
+// PIN on this device. Nothing goes to any server, and the PIN is never kept readable. Where PRF is missing (older iOS,
+// some browsers) it isn't offered; the PIN stays the way in, and the backup.
+const PRF_SALT = enc.encode('Plan&Ride passkey unlock v1');
+const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
+const passkeyOn = () => !!store.get('pinPasskey');
+const passkeyPossible = () => !!window.PublicKeyCredential && isSecureContext;
+const prfAesKey = (bytes) => crypto.subtle.importKey('raw', bytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+const noPrf = () => Object.assign(new Error('no PRF'), { name: 'NotSupportedError' });
+/** Face ID (or the fingerprint) for this passkey, then its secret as a key. */
+async function passkeyKey(id) {
+  const r = await navigator.credentials.get({ publicKey: {
+    challenge: rnd(32), rpId: location.hostname, allowCredentials: [{ type: 'public-key', id }], userVerification: 'required', timeout: 60000,
+    extensions: { prf: { eval: { first: PRF_SALT } } } } });
+  const out = r.getClientExtensionResults().prf?.results?.first;
+  if (!out) throw noPrf();
+  return prfAesKey(out);
+}
+async function sealPin(id, key, pin) {
+  const iv = rnd(12);
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(pin));
+  store.set('pinPasskey', { id: b64(id), iv: b64(iv), data: b64(data) });
+}
+/** A new passkey for Plan&Ride on this device (saved in the phone's passwords), holding the PIN. */
+async function enablePasskey(pin) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { id: location.hostname, name: 'Plan&Ride' }, user: { id: rnd(16), name: 'Plan&Ride', displayName: 'Plan&Ride' }, challenge: rnd(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' }, timeout: 60000,
+    extensions: { prf: { eval: { first: PRF_SALT } } } } });
+  const ext = cred.getClientExtensionResults().prf;
+  if (ext?.enabled === false) throw noPrf();
+  const id = new Uint8Array(cred.rawId);
+  // Some browsers give the secret right away; Safari only on the next use (a second Face ID).
+  const key = ext?.results?.first ? await prfAesKey(ext.results.first) : await passkeyKey(id);
+  await sealPin(id, key, pin);
+}
+/** The PIN back with Face ID; null when the passkey no longer fits (then it is forgotten here). */
+async function pinFromPasskey() {
+  const p = store.get('pinPasskey');
+  const key = await passkeyKey(unb64(p.id));
+  try {
+    return dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(p.iv) }, key, unb64(p.data)));
+  } catch { store.set('pinPasskey', null); return null; }
+}
 /** An account is saved on this device (older versions could keep it without a PIN). */
 const hasAccount = () => hasPin() || !!store.get('creds')?.password;
 /** Which accounts are saved: sadzv.qrbus.me (every account before 2.13) and/or eshop.idsbbsk.sk. */
@@ -222,13 +269,39 @@ function unlockDialog() {
     <input name="pin" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" aria-labelledby="unlock-title" required>
     <p class="error-text" role="alert" hidden></p>
     <div class="pin-actions"><button type="button" class="text-btn" data-cancel>${t('cancel')}</button><button class="btn" type="submit">${t('unlock')}</button></div>
+    ${passkeyOn() ? `<button type="button" class="btn outline" data-passkey>${t('passkey_unlock')}</button>` : ''}
     <button type="button" class="text-btn pin-forgot" data-forgot>${t('lock_forgot')}</button></form>`;
   document.body.appendChild(d);
   const input = $('input', d), err = $('.error-text', d);
-  setTimeout(() => input.focus(), 50);
+  /** The passwords are open: the dialog goes and the ticket shows. */
+  const opened = (creds, pin) => {
+    lockTries = 0;
+    s.creds = creds;
+    s.pin = pin;
+    d.remove();
+    // Show the ticket at once ("Connecting…"); signing in to sadzv takes a few seconds and
+    // until now the screen still looked locked, so people entered the PIN again and again.
+    selectTab(s.tab);
+    afterUnlock();
+  };
+  // With a passkey, Face ID asks at once (like the Android app's fingerprint); the PIN field is the fallback.
+  const viaPasskey = async () => {
+    try {
+      const pin = await pinFromPasskey();
+      const creds = pin && (await decryptCreds(pin));
+      if (creds) return opened(creds, pin);
+      err.textContent = t('passkey_reset');
+    } catch (error) {
+      if (error.name === 'NotAllowedError') return; // cancelled, or Safari wants a tap first: the button is there
+      err.textContent = t('passkey_failed');
+    }
+    err.hidden = false;
+  };
+  if (passkeyOn()) viaPasskey(); else setTimeout(() => input.focus(), 50);
   d.onclick = (e) => {
     if (e.target === d || e.target.closest('[data-cancel]')) d.remove();
     if (e.target.closest('[data-forgot]') && confirm(t('remove_confirm'))) { d.remove(); removeAccount(); }
+    if (e.target.closest('[data-passkey]')) viaPasskey();
   };
   const submit = $('button[type=submit]', d);
   d.onsubmit = async (e) => {
@@ -247,14 +320,7 @@ function unlockDialog() {
       input.value = '';
       return;
     }
-    lockTries = 0;
-    s.creds = creds;
-    s.pin = input.value;
-    d.remove();
-    // Show the ticket at once ("Connecting…"); signing in to sadzv takes a few seconds and
-    // until now the screen still looked locked, so people entered the PIN again and again.
-    selectTab(s.tab);
-    afterUnlock();
+    opened(creds, input.value);
   };
 }
 
@@ -377,6 +443,7 @@ function removeAccount() {
   Object.assign(s, { creds: null, pin: null, sessionId: null, account: null, lastBase64: null, history: null, serial: '' });
   store.set('creds', null);
   store.set('credsEnc', null);
+  store.set('pinPasskey', null);
   store.set('serial', null);
   store.set('onboarded', true);
   closeOverlay('page');
@@ -1162,6 +1229,8 @@ function security(body) {
       <p class="error-text" id="pin-error" hidden></p>
       <button class="btn" type="submit">${t('save')}</button></form>`;
   body.innerHTML = `<p class="hint">${t('pin_hint')}</p>
+    ${hasPin() ? `<h2 class="section-label">${t('passkey_title')}</h2><ul class="list">${switchRow('passkey', t('passkey_switch'),
+      passkeyPossible() ? t('passkey_hint') : t('passkey_unsupported'), passkeyOn(), !passkeyPossible())}</ul>` : ''}
     <h2 class="section-label">${t('pin_change')}</h2>${pinForm(true)}
     <h2 class="section-label">${t('lock_after')}</h2><ul class="list">${timeouts.map(([sec, key]) => `<li><label class="row"><span class="row-title">${t(key)}</span><input type="radio" name="lockAfter" value="${sec}" ${store.get('lockAfter', 0) === sec ? 'checked' : ''}></label></li>`).join('')}</ul>`;
   const form = $('#pin-form', body);
@@ -1175,10 +1244,27 @@ function security(body) {
     if (hasPin() && !(await decryptCreds(f.current))) return (err.textContent = t('lock_wrong', '–'));
     await encryptCreds(s.creds, f.pin);
     s.pin = f.pin;
+    if (passkeyOn()) {
+      // The passkey holds the old PIN: Face ID once more and it holds the new one.
+      const p = store.get('pinPasskey');
+      try { await sealPin(unb64(p.id), await passkeyKey(unb64(p.id)), f.pin); } catch { store.set('pinPasskey', null); toast(t('passkey_reset')); }
+    }
     toast(t('pin_saved'));
     security(body);
   };
-  body.onchange = (e) => { if (e.target.name === 'lockAfter') store.set('lockAfter', Number(e.target.value)); };
+  body.onchange = async (e) => {
+    if (e.target.name === 'lockAfter') store.set('lockAfter', Number(e.target.value));
+    if (e.target.id !== 'passkey') return;
+    if (!e.target.checked) { store.set('pinPasskey', null); toast(t('passkey_off')); return; }
+    if (!s.pin) { e.target.checked = false; toast(t('passkey_need_unlock')); return; }
+    try {
+      await enablePasskey(s.pin);
+      toast(t('passkey_saved'));
+    } catch (error) {
+      e.target.checked = false;
+      toast(t(error.name === 'NotSupportedError' ? 'passkey_unsupported' : error.name === 'NotAllowedError' ? 'passkey_cancelled' : 'passkey_failed'));
+    }
+  };
 }
 
 function appearance(body) {
@@ -1497,7 +1583,7 @@ $('#install-btn').onclick = async () => { if (installPrompt) { installPrompt.pro
  * "?ride=<id>&dep=<ms>" starts following that day's bus of a regular ride here too.
  */
 async function handleLaunch(params) {
-  // A bus shared from Plan&Ride (par.karafa.net/f?t=… sends it here): show it, following is the opener's choice.
+  // A bus shared from Plan&Ride (app.par.karafa.net/f?t=…, and par.karafa.net/f from before 2.18.5, send it here): show it, following is the opener's choice.
   const shared = params.get('follow');
   if (shared) {
     try {
