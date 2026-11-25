@@ -184,6 +184,8 @@ function bind(el) {
   el.onclick = (e) => {
     if (e.target.closest('[data-swap]')) {
       [p.from, p.to, p.fromSug, p.toSug] = [p.to, p.from, p.toSug, p.fromSug];
+      // EM-0129: the results were still the old direction's under the swapped stops: search the new one at once.
+      if (p.results.length || p.searched) return search();
       askAhead();
       return renderPlanner(root);
     }
@@ -323,7 +325,7 @@ function toggleSaved() {
 /** What a search asks the server, also when asked ahead. */
 const query = () => ({
   city: p.city, from: p.from.trim(), to: p.to.trim(), fromSug: p.fromSug, toSug: p.toSug, time: p.time, date: cpDate(p.date), directOnly: p.direct,
-  arriveBy: p.arrive && !!p.time, modes: modes().join(','), walkOther: store.get('walkOther', true),
+  arriveBy: p.arrive && !!p.time, modes: modes().join(','), walkOther: store.get('walkOther', false),
 });
 
 /** 2.18.0: once both stops are chosen the server is asked right away, so Search shows the answer it already has. */

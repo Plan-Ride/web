@@ -15,7 +15,8 @@ const RAIL_LINE = /^(Os|R|REX|RR|Ex|IC|EC|EN|SC|RJ|LE|ZR|Zr|Sp|Sv|Mn|Rx|RE|ICE|N
 export function lineKind(line, group = '', vehicle = '') {
   if (group === 'rail' || vehicle === 'rail' || RAIL_LINE.test(String(line || '').trim())) return 'rail';
   if (vehicle === 'tram' || vehicle === 'trolleybus') return vehicle;
-  return group === 'city' ? 'city' : 'bus';
+  // EM-0128: S.A.D. Zvolen's live board gives no kind; its city lines are 1-3 digits ("21"), others 6 ("606104").
+  return group === 'city' || (!group && /^\d{1,3}[A-Z]?$/.test(String(line || '').trim())) ? 'city' : 'bus';
 }
 /** The line a plate shows: a train keeps its kind ("R 845"), others the number ("Bus 60107" -> "60107"). */
 export const plateLine = (line, kind) => (kind === 'rail' ? String(line || '').trim() : String(line || '').trim().split(' ').at(-1));
@@ -110,21 +111,30 @@ export const GPS_FRESH_MS = 2 * 60000;
  * Fractional stop index of a GPS point along the stops (2.4 = 40 % from stop 2 to 3) and
  * its distance, or null when too far. expectedIndex breaks ties on out-and-back routes.
  */
-export function snapToRoute(lat, lon, coords, maxMeters, expectedIndex = null) {
+export function snapToRoute(lat, lon, coords, maxMeters, expectedIndex = null, roads = null) {
   const k = Math.cos((lat * Math.PI) / 180);
   const xy = ([a, b]) => [(b - lon) * k * 111320, (a - lat) * 110540];
   let best = null;
   for (let i = 0; i < coords.length - 1; i++) {
     if (!coords[i] || !coords[i + 1]) continue;
-    const [ax, ay] = xy(coords[i]);
-    const [bx, by] = xy(coords[i + 1]);
-    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
-    const t = len2 === 0 ? 0 : Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2));
-    const d = Math.hypot(ax + t * dx, ay + t * dy);
-    // Roads bend away from the straight line between stops km apart: allow 10 % of the hop, but only beside it
-    // (EM-0063: 1.5 km past a stop counted as standing at it).
-    if (d > (t > 0 && t < 1 ? Math.max(maxMeters, Math.sqrt(len2) * 0.1) : maxMeters)) continue;
-    const index = i + t;
+    // EM-0126: the road between the stops (emHUB's trace) when known. On the straight line a bus in Banská Bystrica's
+    // centre was 100-200 m "off the route" for minutes, its departures were seen late and the delay jumped.
+    const road = roads?.[i] || [];
+    const pts = [coords[i], ...road, coords[i + 1]].map(xy);
+    let length = 0, hop = null;
+    for (let j = 0; j < pts.length - 1; j++) {
+      const [ax, ay] = pts[j], [bx, by] = pts[j + 1];
+      const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+      const t = len2 === 0 ? 0 : Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2));
+      const d = Math.hypot(ax + t * dx, ay + t * dy);
+      if (!hop || d < hop.d) hop = { d, along: length + t * Math.sqrt(len2) };
+      length += Math.sqrt(len2);
+    }
+    const { d, along } = hop;
+    // Without a trace roads bend away from the straight line between stops km apart: allow 10 % of the hop, but only
+    // beside it (EM-0063: 1.5 km past a stop counted as standing at it).
+    if (d > (!road.length && along > 0 && along < length ? Math.max(maxMeters, length * 0.1) : maxMeters)) continue;
+    const index = i + (length ? along / length : 0);
     const cost = d + (expectedIndex == null ? 0 : Math.max(0, Math.abs(index - expectedIndex) - 2) * 150);
     if (!best || cost < best.cost) best = { index, meters: d, cost };
   }

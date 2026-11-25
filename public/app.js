@@ -639,6 +639,8 @@ function renderTicket(el) {
   const lip = (w) => (list.length > 1 ? `<span class="lip ${w}">${w === 'ids' ? 'IDS BBSK' : 'SAD Zvolen'}</span>` : '');
   el.innerHTML = `
     <header class="screen-head"><div><h1>${esc(open && s.account?.userName ? s.account.userName.split(' ')[0] : hasAccount() ? t('tab_ticket') : 'Plan&Ride')}</h1><p class="hint small" id="card-type"></p></div></header>
+    <div id="follow-slot-ticket"></div>
+    <div data-journey-bar></div>
     <div id="banners"></div>
     <div id="home-notices"></div>
     ${!hasAccount() ? '' : !open
@@ -658,8 +660,6 @@ function renderTicket(el) {
     </section></div>` : ''}
     ${hasIds() ? `<div class="pass" data-pass="ids">${lip('ids')}${idsPassHtml()}</div>` : ''}
     </div>`}
-    <div id="follow-slot-ticket"></div>
-    <div data-journey-bar></div>
     <div id="journeys">${journeysHtml()}</div>
     <div id="rides-next">${ridesHtml()}</div>
     <div id="preview"></div>
@@ -1086,7 +1086,7 @@ function accountRestHtml(open, view) {
       ${link('appearance', t('s_appearance'), t('s_appearance_hint'))}
       ${link('language', t('s_language'), lang() === 'en' ? t('lang_en') : t('lang_sk'))}
       ${link('community', t('s_community'), t('s_community_hint'))}
-      ${switchRow('walk-other', t('walk_other'), t('walk_other_hint'), store.get('walkOther', true))}
+      ${switchRow('walk-other', t('walk_other'), t('walk_other_hint'), store.get('walkOther', false))}
       ${link('sources', t('sources_title'), t('sources_hint'))}
       ${link('about', t('s_about'), t('version', VERSION))}
     </ul>

@@ -239,6 +239,9 @@ console.log('ok');
   assert.equal(lineKind('Bus 60107', 'bus', 'bus'), 'bus');
   assert.equal(lineKind('Bus 9', 'city', 'tram'), 'tram');
   assert.equal(lineKind('Bus 12', 'city', 'bus'), 'city');
+  assert.equal(lineKind('21'), 'city', 'EM-0128: an S.A.D. Zvolen city bus from the live board');
+  assert.equal(lineKind('606104'), 'bus');
+  assert.equal(lineKind('744', 'bus'), 'bus', 'a kind from emHUB wins');
   assert.equal(plannerModes('rail,bogus'), 'rail');
   assert.equal(plannerModes(''), 'bus,city,rail', 'none chosen: all');
 
@@ -281,4 +284,13 @@ console.log('ok');
   assert.equal(cityTown('060411', 'Zvolen, AS'), null);
   assert.equal(cityTown('R 842', 'Zvolen, osobná stanica'), null);
   console.log('ok EM-0110 web: the change of a ticket ridden before');
+}
+
+{
+  // EM-0126: a street bowing 200 m away from the straight line between two stops is on the route when its trace is known.
+  const hop = [[48.73, 19.14], [48.74, 19.14]], road = [[[48.7325, 19.1427], [48.735, 19.1427], [48.7375, 19.1427]]];
+  assert.equal(snapToRoute(48.735, 19.1427, hop, RIDER_GPS_MAX_M), null);
+  const on = snapToRoute(48.735, 19.1427, hop, RIDER_GPS_MAX_M, null, road);
+  assert.ok(Math.abs(on.index - 0.5) < 0.03 && on.meters < 1);
+  console.log('ok EM-0126 web: rider GPS follows the road between stops');
 }

@@ -3,7 +3,7 @@ import { t, lang, loadingHtml } from './i18n.js';
 import { $, $$, esc, api, apiJson, store, config, clock, countdown, delayChip, delayInfo, plate, kindIcon, kindPlate, toast, openSheet, openPage, closeOverlay, log } from './core.js';
 import { openSubmit } from './submit.js';
 import { cityTown } from './fares.js';
-import { tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
+import { plateLine, tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
 
 /** Helping with bus positions: 'off' | 'buttons' | 'auto' (earlier versions had an on/off switch). */
 export const communityMode = () => store.get('communityMode', store.get('communityOn', false) ? 'buttons' : 'off');
@@ -324,6 +324,7 @@ const isLive = (d) => d?.positionSource === 'busGps' || d?.positionSource === 'r
 const sameRef = (a, b) => a && b && JSON.stringify(a) === JSON.stringify(b);
 
 const MAP_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="m15 5.1-6-2.1-6 2.3v15.6l6-2.3 6 2.1 6-2.3V2.8l-6 2.3Zm-1 13.5-4-1.4V5.4l4 1.4v11.8Z"/></svg>';
+const CLOSE_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>';
 const SHARE_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M18 16.1c-.8 0-1.4.3-2 .8l-7.1-4.2c.1-.2.1-.5.1-.7s0-.5-.1-.7l7-4.1c.5.5 1.2.8 2.1.8 1.7 0 3-1.3 3-3s-1.3-3-3-3-3 1.3-3 3c0 .2 0 .5.1.7l-7 4.1c-.5-.5-1.2-.8-2.1-.8-1.7 0-3 1.3-3 3s1.3 3 3 3c.8 0 1.6-.3 2.1-.8l7.1 4.2c-.1.2-.1.4-.1.6 0 1.6 1.3 2.9 2.9 2.9s2.9-1.3 2.9-2.9-1.3-2.9-2.9-2.9Z"/></svg>';
 
 /** The bus as the share payload (the same as the Android app's): only the bus and where it's ridden, nothing about the sharer. */
@@ -571,6 +572,7 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
          <button class="btn outline wide" data-add-journey ${detail?.stops?.length ? '' : 'disabled'}>${t('journey_add')}</button>
          ${alight == null ? `<p class="hint small">${t('journey_pick_alight')}</p>` : ''}`}
     <div data-journey-bar>${journeyBarHtml()}</div>
+    ${following && follow.nextLegs?.length ? wholeJourneyHtml(follow, detail) : ''}
     ${timeline}`;
   bindJourneyBar($('[data-journey-bar]', body));
   body.onclick = (e) => {
@@ -591,6 +593,25 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
   // EM-0124: only where the stops can be scrolled by hand too: half open (touch screens) the sheet shows its top, the
   // Follow button, and the stops scroll once it is pulled fully open.
   if (next && !body.dataset.scrolled && getComputedStyle(body).overflowY !== 'hidden') { body.dataset.scrolled = '1'; next.scrollIntoView({ block: 'center' }); }
+}
+
+/**
+ * The whole journey followed, opened from its card or notification: each bus with where you get on and off and when,
+ * and how long each change is, so the trip with its changes is seen at once (the stops below are this bus's).
+ */
+function wholeJourneyHtml(f, detail) {
+  const mins = (hm) => (/^\d{1,2}:\d{2}$/.test(hm || '') ? Number(hm.split(':')[0]) * 60 + Number(hm.split(':')[1]) : null);
+  const legs = [f, ...f.nextLegs];
+  const rows = legs.map((l, i) => {
+    const wait = i ? (mins(l.leaves) - mins(legs[i - 1].arrives) + 1440) % 1440 : null;
+    const change = i && mins(l.leaves) != null && mins(legs[i - 1].arrives) != null
+      ? `<li class="jw-change">${esc(t('journey_change_wait', wait, readableStop(l.fromStop || legs[i - 1].toStop || '')))}</li>` : '';
+    const ends = [l.leaves && `${l.leaves} ${readableStop(l.fromStop || '')}`.trim(), l.toStop && `${l.arrives || ''} ${readableStop(l.toStop)}`.trim()].filter(Boolean);
+    return `${change}<li class="jw-leg${i ? '' : ' now'}">${kindPlate(l.ref.line, lineKind(l.ref.line))}<span>${ends.map(esc).join('<br>')}
+      ${i ? '' : `<small>${esc(t('journey_now'))}${detail?.delaySeconds != null ? ' ' + delayChip(detail.delaySeconds) : ''}</small>`}</span></li>`;
+  }).join('');
+  const end = legs.at(-1).arrives;
+  return `<section class="journey-whole"><h4>${t('journey_whole')}</h4><ol>${rows}</ol>${end ? `<p class="hint small">${esc(t('journey_there_at', end))}</p>` : ''}</section>`;
 }
 
 const ridersText = (n) => (n === 1 ? t('community_rider') : t('community_riders', n));
@@ -787,7 +808,7 @@ async function followTick() {
   if (Date.now() > Math.max(follow.startedAt + 3 * 3600 * 1000, endsAt)) return stopFollow();
   try {
     const detail = await loadTrip(follow.ref, { withCoordinates: communityMode() === 'auto' });
-    if (follow && detail.stops.length) follow.detail = detail;
+    if (follow && detail.stops.length) { follow.detail = detail; follow.fetchedAt = Date.now(); follow.offlineSince = 0; }
     // Journey legs from the planner learn where the user gets on and off from their trip link.
     if (follow && !follow.boardingPlatformIds?.length && detail.boardingOrder) {
       follow.boardingPlatformIds = [detail.boardingOrder];
@@ -799,7 +820,11 @@ async function followTick() {
       follow.boardingPlatformIds = [...follow.boardingPlatformIds, detail.boardingOrder];
       saveFollow();
     }
-  } catch (err) { log('W', 'follow', err.message); }
+  } catch (err) {
+    log('W', 'follow', err.message);
+    // 2.19.0: no connection: following goes on with what was last known (and the phone's GPS); the card says so.
+    if (follow && !navigator.onLine) follow.offlineSince ||= follow.fetchedAt || Date.now();
+  }
   if (!follow) return;
   const d = effectiveDetail(follow);
   if (d?.stops.length) {
@@ -882,7 +907,7 @@ function updateLocation(p) {
     // EM-0096: the bus was thought to be still coming, but the phone has gone on down the route: the rider may be on it.
     const stops = follow?.detail?.stops;
     const hit = stops && pos.coords.accuracy <= 50
-      ? snapToRoute(pos.coords.latitude, pos.coords.longitude, stops.map((s) => (s.lat != null ? [s.lat, s.lon] : null)), RIDER_GPS_MAX_M) : null;
+      ? snapToRoute(pos.coords.latitude, pos.coords.longitude, stops.map((s) => (s.lat != null ? [s.lat, s.lon] : null)), RIDER_GPS_MAX_M, null, riderRoads(follow.detail)) : null;
     if (hit) {
       if (checkIndex >= 0 && hit.index > checkIndex + 0.05 && hit.index > (p.boardingIndex ?? 0) + 0.05) leftOnBus = true;
       checkIndex = hit.index;
@@ -942,6 +967,24 @@ function withPassedTimes(d) {
 const STOP_RADIUS_M = 60; // a bus standing this close to a stop is stopped there (timetable stop positions can be tens of metres off)
 const MOVING_MPS = 2.5; // slower than this (about 9 km/h) the bus counts as stopped
 
+/** EM-0126: emHUB's road traces from each stop to the next of the followed bus (by the stop each starts at), loaded once. */
+const roadsOf = new WeakMap();
+function riderRoads(d) {
+  if (!follow) return null;
+  if (!roadsOf.has(follow)) {
+    const f = follow;
+    roadsOf.set(f, null);
+    const known = d.stops.map((s, i) => (s.lat != null ? i : -1)).filter((i) => i >= 0);
+    apiJson('/api/live/path?stops=' + encodeURIComponent(known.map((i) => `${d.stops[i].lat.toFixed(6)},${d.stops[i].lon.toFixed(6)}`).join(';')))
+      .then((hops) => {
+        const roads = [];
+        known.forEach((a, j) => { const b = known[j + 1]; if (b === a + 1 && hops[j]?.length) roads[a] = hops[j]; });
+        roadsOf.set(f, roads);
+      }).catch(() => roadsOf.delete(f));
+  }
+  return roadsOf.get(follow);
+}
+
 function startRiderWatch() {
   if (riderWatch == null) {
     riderWatch = navigator.geolocation.watchPosition(onRiderFix, () => {}, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
@@ -956,7 +999,7 @@ function onRiderFix(pos) {
   if (!d?.stops?.length || d.stops.every((s) => s.lat == null)) return; // coordinates not loaded yet
   if (pos.coords.accuracy > 50) return;
   const p = tripProgress(effectiveDetail(follow), follow);
-  const hit = snapToRoute(pos.coords.latitude, pos.coords.longitude, d.stops.map((s) => (s.lat != null ? [s.lat, s.lon] : null)), RIDER_GPS_MAX_M, p.position);
+  const hit = snapToRoute(pos.coords.latitude, pos.coords.longitude, d.stops.map((s) => (s.lat != null ? [s.lat, s.lon] : null)), RIDER_GPS_MAX_M, p.position, riderRoads(d));
   if (!hit) return;
   const moving = pos.coords.speed != null ? pos.coords.speed >= MOVING_MPS : lastRiderIndex >= 0 && hit.index > lastRiderIndex + 0.05;
   lastRiderIndex = Math.max(lastRiderIndex, hit.index);
@@ -1145,13 +1188,10 @@ function followCardHtml() {
   if (!d?.stops?.length) return follow ? `<section class="follow"><p class="hint"><span class="spinner"></span> ${kindPlate(follow.ref.line, lineKind(follow.ref.line))} ${esc(follow.ref.destination)}</p></section>` : '';
   const p = tripProgress(d, follow);
   const f = follow;
-  let delay;
-  if (f.localDelay && d.delaySeconds === f.localDelay.seconds) delay = `${delayChip(d.delaySeconds)} <span class="hint small">${t(f.localDelay.fromGps ? 'community_your_phone' : 'community_yours')}</span>`;
-  else if (d.community && (d.positionSource === 'riderGps' || d.positionSource === 'riders')) delay = `${delayChip(d.delaySeconds)} <span class="hint small">${esc(ridersText(d.community.reporters))}</span>`;
-  else if (d.positionSource === 'history') delay = `${delayChip(d.delaySeconds)} <span class="hint small">${t('history_estimate')}</span>`;
-  else if (d.positionSource === 'timetable' && d.history && store.get('predictShift', true)) delay = historyHint(d);
-  else if (d.positionSource === 'timetable' && f.ref.scheduleUrl) delay = `<span class="hint small">${t('schedule_only')}</span>`;
-  else delay = delayChip(d.delaySeconds);
+  // Where the delay comes from, under its pill (the pill says the delay itself).
+  const source = f.localDelay && d.delaySeconds === f.localDelay.seconds ? t(f.localDelay.fromGps ? 'community_your_phone' : 'community_yours')
+    : d.community && (d.positionSource === 'riderGps' || d.positionSource === 'riders') ? ridersText(d.community.reporters)
+    : d.positionSource === 'history' ? t('history_estimate') : '';
 
   const title = p.onBoard
     ? t('follow_next', p.nextStopName || d.destination, clock(p.nextExpectedMs))
@@ -1182,25 +1222,50 @@ function followCardHtml() {
       if (d.stops[p.nextIndex - 1]) actions += `<button class="chip" data-report="${p.nextIndex - 1}">${esc(t('community_still_at', short(d.stops[p.nextIndex - 1].name)))}</button>`;
     }
   }
-  return `<section class="follow" aria-live="polite">
-    <div class="follow-top">${kindPlate(f.ref.line, lineKind(f.ref.line))}<span class="follow-dest">${esc(d.destination)}</span><strong class="follow-big">${esc(big)}</strong></div>
-    <p class="follow-title">${esc(title)}</p>
-    ${sub ? `<p class="follow-sub">${esc(sub)}</p>` : ''}
-    ${f.nextLegs?.length ? `<ul class="follow-legs">${[
+  // The card as Android has it: LIVE, share and close; the plate and where the bus goes; the countdown with what it counts
+  // to; the delay; how far the bus is; your part of the line with the bus on it and its two ends.
+  const live = isLive(d);
+  const caption = p.onBoard ? t('follow_until_next', p.nextStopName || d.destination) : t('follow_until_departure', p.boardingStopName || '');
+  const last = Math.max(1, d.stops.length - 1), start = Math.min(Math.max(p.boardingIndex ?? 0, 0), last - 1);
+  const away = p.onBoard ? 0 : Math.ceil(start - p.position);
+  const pill = d.positionSource === 'timetable' && d.history && store.get('predictShift', true) ? historyText(d).split(' (')[0]
+    : d.positionSource === 'timetable' && f.ref.scheduleUrl ? t('schedule_only') : delayInfo(d.delaySeconds)?.text;
+  const very = (d.delaySeconds || 0) >= 300;
+  return `<section class="follow fc" aria-live="polite">
+    <div class="fc-head"><span class="fc-live${live ? ' on' : ''}"><i></i>${esc(t(live ? 'follow_live' : 'follow_timetable'))}</span>
+      ${config.hub ? `<button class="fc-icon" data-eta aria-label="${esc(t(f.eta ? 'eta_sharing' : 'eta_share'))}">${SHARE_SVG}</button>` : ''}
+      <button class="fc-icon" data-stop aria-label="${esc(t('unfollow'))}">${CLOSE_SVG}</button></div>
+    <div class="fc-line"><span class="fc-plate">${esc(plateLine(f.ref.line, lineKind(f.ref.line)))}</span><span class="fc-dest">→ ${esc(d.destination)}</span></div>
+    <div class="fc-count"><strong>${esc(big)}</strong><span>${esc(caption)}</span></div>
+    ${pill ? `<span class="fc-pill${very ? ' very' : ''}">${esc(pill)}</span>` : ''}
+    ${source ? `<p class="fc-note">${esc(source)}</p>` : ''}
+    ${f.offlineSince ? `<p class="fc-note">${esc(t('p2p_offline', Math.max(0, Math.round((Date.now() - f.offlineSince) / 60000))))}</p>` : ''}
+    ${away > 0 ? `<p class="fc-away">${esc(t(away === 1 ? 'follow_stops_away_1' : away < 5 ? 'follow_stops_away_few' : 'follow_stops_away', away))}</p>` : ''}
+    ${fcTrack(d, p, live)}
+    <div class="fc-ends"><span>${esc(p.boardingStopName || d.stops[start]?.name || '')}</span><span>${esc(p.alightStopName || d.destination)}</span></div>
+    ${catchLine(d, p)}
+    ${sub && p.onBoard ? `<p class="fc-note">${esc(sub)}</p>` : ''}
+    ${f.nextLegs?.length ? `<ul class="fc-legs">${[
       f.toStop && f.arrives ? `<li><strong>${esc(t('journey_get_off', f.toStop, f.arrives))}</strong></li>` : '',
       ...f.nextLegs.map((l) => `<li>${esc(t('journey_next_leg', l.ref.line, [l.leaves && `${l.leaves} ${l.fromStop || ''}`.trim(), l.toStop && `${l.toStop} ${l.arrives || ''}`.trim()].filter(Boolean).join(' → ')))}</li>`),
     ].join('')}</ul>` : ''}
-    <div class="follow-delay">${delay}</div>
-    ${catchLine(d, p)}
-    ${progressTrack(d, p)}
-    ${f.note ? `<p class="hint small">${esc(f.note)}</p>` : ''}
+    ${f.note ? `<p class="fc-note">${esc(f.note)}</p>` : ''}
     ${actions ? `<div class="follow-actions">${actions}</div>` : ''}
     ${crowdHtml(d, p)}
-    ${othersHtml()}
-    <div class="follow-foot">
-      <label class="mini-switch"><input type="checkbox" data-push ${f.pushId ? 'checked' : ''}> ${t('follow_push')}</label>
-      <span>${config.hub ? `<button class="text-btn" data-eta>${t(f.eta ? 'eta_sharing' : 'eta_share')}</button>` : ''}<button class="text-btn" data-open-trip>${t('show_stops')}</button><button class="text-btn danger" data-stop>${t('unfollow')}</button></span>
-    </div></section>`;
+    <label class="fc-push"><input type="checkbox" data-push ${f.pushId ? 'checked' : ''}> ${t('follow_push')}</label>
+    ${othersHtml()}</section>`;
+}
+
+/** Your part of the line as on Android: a dot per stop, your two stops bigger, the ridden part bright and the bus on it. */
+function fcTrack(d, p, live) {
+  const last = Math.max(1, d.stops.length - 1), start = Math.min(Math.max(p.boardingIndex ?? 0, 0), last - 1);
+  const end = Math.min(Math.max(p.alightIndex ?? last, start + 1), last), hops = end - start;
+  const pct = (i) => `${(Math.min(Math.max(i, 0), hops) / hops) * 100}%`;
+  const at = p.position - start;
+  return `<div class="fc-track" role="img" aria-label="${esc(p.currentStopName || p.nextStopName || '')}"><div class="fc-rail">
+    <span class="fc-ridden" style="width:${pct(at)}"></span>
+    ${hops <= 40 ? Array.from({ length: hops + 1 }, (_, i) => `<i class="${i === 0 || i === hops ? 'end' : ''}" style="left:${pct(i)}"></i>`).join('') : ''}
+    <span class="fc-bus${live ? ' live' : ''}${at < 0 ? ' waiting' : ''}" style="left:${pct(at)}">${BUS_SVG}</span></div></div>`;
 }
 
 /** The other buses followed, each with when it leaves and a way to stop following it. */
@@ -1214,39 +1279,26 @@ function othersHtml() {
   }).join('')}</ul></div>`;
 }
 
-/** "#1d4fb8" -> [h, s, l] (0-360, 0-1, 0-1). */
-function toHsl(hex) {
-  const n = parseInt(hex.replace('#', '').padEnd(6, '0').slice(0, 6), 16);
-  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map((v) => v / 255);
-  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
-  if (!d) return [0, 0, l];
-  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return [(h * 60 + 360) % 360, d / (1 - Math.abs(2 * l - 1)), l];
-}
-const hsl = ([h, s, l]) => `hsl(${h.toFixed(1)} ${(s * 100).toFixed(1)}% ${(l * 100).toFixed(1)}%)`;
 const MOOD_MINUTES = 8;
 /**
- * EM-0121: the followed bus's card is alive like the Android one: the theme's colour, a neighbouring hue and a deeper
- * shade drift into each other (~10 s each way). Each minute late warms it toward amber and slows the drift, each minute
- * early cools it toward teal and speeds it up, up to 8 minutes. Set on the slot (it stays while the card inside is
+ * EM-0121: the followed bus's card is alive like the Android one: the theme's colour, a neighbouring shade and a deeper
+ * one drift into each other (~10 s each way). Late it turns orange (red from 5 minutes) and the drift slows, early it
+ * turns teal and speeds up, more with each minute up to 8. EM-0127: mixed straight toward that colour (turning the
+ * hue took a blue theme through purple, which read as nothing). Set on the slot (it stays while the card inside is
  * redrawn every second), so the colour glides (CSS @property) and the drift keeps its place (a delay from the clock).
  */
 function paintFollow(el) {
   const d = follow && effectiveDetail(follow);
   el.classList.toggle('follow-alive', !!d?.stops?.length);
   if (!d?.stops?.length) return;
-  const tone = Math.max(-1, Math.min(1, Math.round((d.delaySeconds || 0) / 60) / MOOD_MINUTES));
-  let [h, sat, l] = toHsl(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1D4FB8');
-  if (tone) {
-    const turn = (((tone > 0 ? 35 : 175) - h + 540) % 360) - 180; // the shortest way round
-    h = (h + turn * 0.85 * Math.abs(tone) + 360) % 360;
-    sat = Math.max(sat, 0.35 * Math.abs(tone)); // a grey theme still shows it
-    if (tone > 0) l *= 1 - 0.18 * tone;
-  }
+  const minutes = Math.round((d.delaySeconds || 0) / 60), tone = Math.max(-1, Math.min(1, minutes / MOOD_MINUTES));
+  const target = minutes >= 5 ? '#E5332A' : minutes > 0 ? '#F07A1A' : '#13A89A';
+  const share = tone ? Math.round(65 + 35 * Math.abs(tone)) : 0;
+  const mood = `color-mix(in srgb, ${target} ${share}%, var(--accent))`;
   const speed = tone < 0 ? 1 - tone : 1 - 0.3 * tone, drift = 10 / speed;
-  el.style.setProperty('--mood', hsl([h, sat, l]));
-  el.style.setProperty('--mood2', hsl([(h + 26) % 360, sat, l]));
-  el.style.setProperty('--deep', hsl([h, sat, l * 0.72]));
+  el.style.setProperty('--mood', mood);
+  el.style.setProperty('--mood2', `color-mix(in srgb, ${target} ${Math.max(0, share - 15)}%, color-mix(in srgb, var(--accent) 80%, #fff))`);
+  el.style.setProperty('--deep', `color-mix(in srgb, ${mood} 70%, #000)`);
   el.style.setProperty('--drift', `${drift.toFixed(2)}s`);
   el.style.setProperty('--drift-at', `${(-(Date.now() / 1000) % (2 * drift)).toFixed(2)}s`);
 }
@@ -1268,7 +1320,10 @@ export function renderFollowSlot(el) {
     if (drop) return dropOther(others[Number(drop.dataset.dropOther)]?.ref);
     // EM-0072: on foot or by car today, one tap.
     if (e.target.closest('[data-car]')) { store.set('catchCar', !store.get('catchCar', false)); drive.at = 0; return renderAllFollowSlots(); }
-    if (e.target.closest('[data-open-trip]') && follow) return openTrip(follow.ref, { boardingPlatformIds: follow.boardingPlatformIds, alightOrder: follow.alightOrder });
+    // The whole card opens the bus with the whole journey (its own buttons, switches and the list of others aside), as on Android.
+    if (follow && (e.target.closest('[data-open-trip]') || (e.target.closest('.follow') && !e.target.closest('button, a, input, label, .also-following')))) {
+      return openTrip(follow.ref, { boardingPlatformIds: follow.boardingPlatformIds, alightOrder: follow.alightOrder });
+    }
   };
   el.onchange = (e) => {
     if (!e.target.matches('[data-push]')) return;

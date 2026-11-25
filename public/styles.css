@@ -225,12 +225,59 @@ input[type="color"] { width: 32px; height: 32px; border: 0; background: none; pa
 @property --deep { syntax: '<color>'; inherits: true; initial-value: #153b8a; }
 .follow-alive { transition: --mood 1.5s, --mood2 1.5s, --deep 1.5s; }
 .follow-alive > .follow {
-  background: linear-gradient(115deg, color-mix(in srgb, var(--mood) 30%, var(--surface)), color-mix(in srgb, var(--deep) 16%, var(--surface)),
-    color-mix(in srgb, var(--mood2) 30%, var(--surface)), color-mix(in srgb, var(--mood) 22%, var(--surface))) 0 0 / 260% 260%;
-  border-color: color-mix(in srgb, var(--mood) 65%, var(--line));
+  cursor: pointer;
+  /* EM-0127, then like Android: the colour itself at full strength, white text on it. */
+  background: linear-gradient(115deg, var(--mood), var(--deep), var(--mood2), var(--mood)) 0 0 / 260% 260%;
+  border: 0; color: #fff; border-radius: 28px; padding: 12px 8px 18px 20px;
   animation: follow-drift var(--drift, 10s) ease-in-out var(--drift-at, 0s) infinite alternate;
 }
 @keyframes follow-drift { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
+/* The followed bus's card, laid out as Android's (FollowCard.kt). */
+.fc-head { display: flex; align-items: center; gap: 2px; }
+.fc-live { flex: 1; display: inline-flex; align-items: center; gap: 8px; font: 700 13px/1 var(--display); letter-spacing: .04em; text-transform: uppercase; }
+.fc-live i { position: relative; width: 8px; height: 8px; border-radius: 50%; background: #fff; }
+.fc-live.on i::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: #fff; animation: fc-pulse 1.1s ease-out infinite; }
+@keyframes fc-pulse { from { transform: scale(1); opacity: .6; } to { transform: scale(2.2); opacity: 0; } }
+.fc-icon { width: 44px; height: 44px; display: grid; place-items: center; border: 0; background: none; color: #fff; border-radius: 50%; cursor: pointer; }
+.fc-icon:hover { background: rgb(255 255 255 / .12); }
+.fc .fc-line, .fc .fc-count, .fc .fc-ends, .fc .fc-track, .fc .fc-away, .fc .fc-note, .fc .fc-legs, .fc .fc-push, .fc .catch { margin-right: 12px; }
+.fc-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fc-plate { background: #fff; color: var(--mood); border-radius: 8px; padding: 3px 10px; font: 700 18px/1.2 var(--display); flex: none; }
+.fc-dest { font: 500 18px/1.2 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-count { display: flex; align-items: flex-end; gap: 10px; margin-top: 14px; }
+.fc-count strong { font: 700 40px/1 var(--display); white-space: nowrap; }
+.fc-count span { font-size: 14px; opacity: .9; padding-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fc-pill { display: inline-block; margin-top: 8px; padding: 4px 12px; border-radius: 999px; background: rgb(255 255 255 / .18); font-weight: 600; font-size: 14px; }
+.fc-pill.very { background: rgb(255 255 255 / .32); }
+.fc-note { margin: 6px 0 0; font-size: 13px; opacity: .9; }
+.fc-away { margin: 16px 0 6px; font-size: 13px; font-weight: 600; opacity: .9; }
+.fc-track { height: 34px; margin-top: 16px; padding: 0 15px; }
+.fc-away + .fc-track { margin-top: 0; }
+.fc-rail { position: relative; top: 15px; height: 5px; border-radius: 3px; background: rgb(255 255 255 / .3); }
+.fc-ridden { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: rgb(255 255 255 / .85); transition: width 1.4s ease; }
+.fc-rail i { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgb(255 255 255 / .6); }
+.fc-rail i.end { width: 12px; height: 12px; margin: -6px 0 0 -6px; background: #fff; box-shadow: inset 0 0 0 3px rgb(0 0 0 / .15); }
+.fc-bus { position: absolute; top: 50%; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; background: #fff; color: var(--mood); display: grid; place-items: center; transition: left 1.4s ease; }
+.fc-bus.waiting { opacity: .7; }
+.fc-bus.live { box-shadow: 0 0 0 0 rgb(255 255 255 / .45); animation: fc-halo 1.4s ease-out infinite; }
+@keyframes fc-halo { to { box-shadow: 0 0 0 10px rgb(255 255 255 / 0); } }
+.fc-bus svg { width: 18px; height: 18px; }
+.fc-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; font-size: 13px; font-weight: 600; opacity: .9; }
+.fc-ends span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-ends span:first-child { flex: 1; min-width: 0; }
+.fc-ends span:last-child { max-width: 55%; text-align: right; }
+.fc .catch { background: none; padding: 0; margin-top: 10px; color: #fff; font-weight: 400; }
+.fc .catch.miss, .fc .catch.leaveNow { background: none; color: #fff; font-weight: 600; }
+.fc .catch .mode-toggle { background: none; border-color: rgb(255 255 255 / .6); color: #fff; }
+.fc-legs { margin: 12px 0 0; padding: 0; list-style: none; font-size: 14px; display: grid; gap: 4px; }
+.fc-legs li:not(:first-child) { opacity: .9; }
+.fc-push { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 14px; cursor: pointer; }
+.fc-push input { accent-color: #fff; width: 18px; height: 18px; }
+.fc .chip { background: transparent; border-color: rgb(255 255 255 / .6); color: #fff; }
+.fc .chip.on { background: #fff; color: var(--mood); }
+.fc .hint, .fc .crowd p { color: #fff; opacity: .9; }
+.fc .also-following { margin: 12px 12px 0 0; }
+@media (prefers-reduced-motion: reduce) { .fc-live.on i::after, .fc-bus.live { animation: none; } }
 .follow-top { display: flex; align-items: center; gap: 10px; }
 .follow-dest { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .follow-big { font: 700 26px/1 var(--display); color: var(--accent-text); }
@@ -257,6 +304,14 @@ input[type="color"] { width: 32px; height: 32px; border: 0; background: none; pa
 .journey-bar > span, .journey-bar > details { flex: 1; min-width: 0; font-weight: 600; }
 .journey-bar summary { cursor: pointer; }
 .journey-bar details ul { margin: 6px 0 0; padding-left: 16px; font-weight: 400; }
+.journey-whole { margin: 12px 0; padding: 12px 14px; border-radius: 14px; background: var(--surface-2); }
+.journey-whole h4 { margin: 0 0 8px; font: 600 16px/1.2 var(--display); }
+.journey-whole ol { list-style: none; margin: 0; padding: 0; }
+.jw-leg { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
+.jw-leg > span { flex: 1; min-width: 0; font-size: 15px; }
+.jw-leg small { display: block; color: var(--accent-text); font-weight: 600; margin-top: 2px; }
+.jw-leg.now > span { font-weight: 600; }
+.jw-change { margin: 2px 0 2px 14px; padding-left: 12px; border-left: 2px dashed var(--line); font-size: 13px; color: var(--muted); }
 .follow-legs { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
 .follow-legs strong { color: var(--text); }
 .chip { border: 1.5px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 14px; font-weight: 600; font-size: 14px; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
