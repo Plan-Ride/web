@@ -2,8 +2,8 @@
 import { t, lang } from './i18n.js';
 import { $, esc, apiJson, store, toast, clock, money, kindIcon, kindPlate } from './core.js';
 import { readableStop, lineNumber, nextRideDeparture, localToEpoch, WORKDAYS, EVERY_DAY, plannerLeg, lineKind } from './logic.js';
-import { openScheduledTrip, startJourney, isFollowed } from './live.js';
-import { parseTariffs, journeyCost, fareCategory } from './fares.js';
+import { openScheduledTrip, startJourney, isFollowed, cityRides } from './live.js';
+import { parseTariffs, journeyCost, fareCategory, heldTicket } from './fares.js';
 import { rides, saveRides, rideDayText } from './rides.js';
 import { openSubmit } from './submit.js';
 
@@ -345,7 +345,8 @@ function fareNote(c) {
   const category = fareCategory([card?.cardTypeName || '', ...(ids?.tickets || []).map((x) => x.name)]);
   // ponytail: any valid IDS BBSK season ticket counts as covering the regional buses (a Sieťovka does; a Časovka
   // only its zones), and a valid SAD Zvolen one as covering both cities. Same as the Android app.
-  const cost = journeyCost(tariffs, c.segments, category, cityPass, passes.length > 0);
+  // EM-0110: a city bus ridden a little earlier (followed here) makes the next one cost its change.
+  const cost = journeyCost(tariffs, c.segments, category, cityPass, passes.length > 0, heldTicket(tariffs, cityRides(), now));
   const total = cost.sadzvCents + cost.idsCents;
   let price = total === 0 && cost.covered ? t('fare_covered') : total === 0 ? '' : cost.unknown ? t('fare_from', money(total / 100)) : money(total / 100);
   if (price && cost.train) price = t('fare_plus_train', price);

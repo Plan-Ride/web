@@ -2,6 +2,7 @@
 import { t, lang, loadingHtml } from './i18n.js';
 import { $, $$, esc, api, apiJson, store, config, clock, countdown, delayChip, delayInfo, plate, kindIcon, kindPlate, toast, openSheet, openPage, closeOverlay, log } from './core.js';
 import { openSubmit } from './submit.js';
+import { cityTown } from './fares.js';
 import { tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
 
 /** Helping with bus positions: 'off' | 'buttons' | 'auto' (earlier versions had an on/off switch). */
@@ -237,6 +238,19 @@ export function openFollowed() {
 }
 
 // ------------------------------------------------------------------ trip sheet
+
+/** EM-0110: a followed city bus left the rider's stop with them on it: kept 3 hours, one per trip (key). */
+function addCityRide(town, boardedMs, key) {
+  const now = Date.now();
+  const kept = (store.get('cityRides', []) || []).filter((r) => now - r[1] < 3 * 3600000 && r[2] !== key);
+  store.set('cityRides', [...kept, [town, boardedMs, key]]);
+}
+/** The city buses ridden in the last 3 hours, for the planner's prices (heldTicket in fares.js). */
+export const cityRides = () => (store.get('cityRides', []) || []).filter((r) => Date.now() - r[1] < 3 * 3600000).map(([town, boardedMs]) => ({ town, boardedMs }));
+
+// EM-0095: getting on and off, told apart by an icon as well as the colour.
+const ON_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 7 9.6 8.4l2.6 2.6H2v2h10.2l-2.6 2.6L11 17l5-5-5-5zm9 12h-8v2h8c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-8v2h8v14z"/></svg>';
+const OFF_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m17 7-1.4 1.4 2.6 2.6H8v2h10.2l-2.6 2.6L17 17l5-5-5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>';
 
 let sheetTrip = null; // { ref, boardingPlatformIds, alightOrder, detail, loading, error }
 
@@ -542,7 +556,7 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
       const shift = (stop.actualMs != null || detail.delaySeconds != null) && clock(exp) !== clock(stop.scheduledMs);
       return `<li class="${passed ? 'passed' : ''} ${next ? 'next' : ''} ${isAlight ? 'alight' : ''} ${isBoard ? 'boarding' : ''}">
         <button ${!passed ? `data-alight="${stop.order}"` : 'disabled'}>
-          <span class="dot"></span><span class="stop-name">${esc(stop.name)}${isAlight ? `<small>${t('your_stop')}</small>` : ''}${isBoard ? `<small>${t('your_board')}</small>` : ''}${stop.goesOnAs ? `<small>${esc(t('goes_on_as', stop.goesOnAs))}</small>` : ''}${stop.platform ? `<small class="stop-pf">${esc(t('platform', stop.platform))}</small>` : ''}</span>
+          <span class="dot"></span><span class="stop-name">${esc(stop.name)}${isAlight ? `<small class="mark">${OFF_ICON}${t('your_stop')}</small>` : ''}${isBoard ? `<small class="mark">${ON_ICON}${t('your_board')}</small>` : ''}${stop.goesOnAs ? `<small>${esc(t('goes_on_as', stop.goesOnAs))}</small>` : ''}${stop.platform ? `<small class="stop-pf">${esc(t('platform', stop.platform))}</small>` : ''}</span>
           <span class="stop-time">${shift ? `<s>${clock(stop.scheduledMs)}</s>${clock(exp)}` : clock(stop.scheduledMs)}</span></button></li>`;
     }).join('')}</ol>`;
   }
@@ -790,6 +804,9 @@ async function followTick() {
   const d = effectiveDetail(follow);
   if (d?.stops.length) {
     const p = tripProgress(d, follow);
+    // EM-0110: a city bus that left the rider's stop with them on it: when its ticket was bought, for the planner.
+    const town = p.onBoard && p.boardingIndex != null && p.boardingExpectedMs > 0 && cityTown(follow.ref.line, p.boardingStopName);
+    if (town) addCityRide(town, p.boardingExpectedMs, `${follow.ref.line}|${follow.ref.tripNumber}|${follow.ref.serviceDate || ''}|${p.boardingIndex}`);
     if (p.finished) {
       const [next, ...rest] = follow.nextLegs || [];
       if (next) {

@@ -1,7 +1,7 @@
 // 2.17.0: a rider tells us what the timetable lacks (a connection, a stop) or what's wrong at a stop. An admin checks
 // every one in emHUB before the timetable changes (same as the Android app's form).
 import { t } from './i18n.js';
-import { esc, apiJson, store, toast } from './core.js';
+import { esc, apiJson, store, toast, shrinkImage } from './core.js';
 
 const HUB_STOP = 'hub';
 
@@ -27,6 +27,7 @@ export function openSubmit(kind, { from = null, to = null, stopName = '' } = {})
         : `<p class="hint">${t('submit_trip_pick')}</p>`) : ''}
       ${k === 'stop' ? `<p class="hint small">${t('submit_stop_here')}</p><label class="field">${t('submit_stop_name')}<input name="stopName" maxlength="80" required></label>` : ''}
       ${k === 'problem' ? `<p><b>${esc(stopName)}</b></p><label class="field">${t('submit_problem')}<textarea name="text" rows="3" maxlength="2000" required></textarea></label>` : ''}
+      <label class="field">${t('submit_images')}<input type="file" name="images" accept="image/*" multiple><small class="hint">${t('submit_images_hint')}</small></label>
       <label class="field">${t('submit_name')}<input name="name" maxlength="60" required value="${esc(store.get('submitName', ''))}"></label>
       <p class="hint small">${t('submit_review_note')}</p>
       <div class="row"><button class="btn" type="submit" ${k === 'trip' && !tripReady ? 'disabled' : ''}>${t('submit_send')}</button>
@@ -47,6 +48,8 @@ export function openSubmit(kind, { from = null, to = null, stopName = '' } = {})
       }
       form.querySelector('[type=submit]').disabled = true;
       try {
+        // EM-0120: up to 3 screenshots (where the connection was seen), shrunk, location removed (emHUB checks them again).
+        body.images = await Promise.all([...form.images.files].slice(0, 3).map(shrinkImage));
         await apiJson('/api/hub/submissions', body);
         d.remove();
         toast(t('submit_thanks'));

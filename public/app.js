@@ -1,7 +1,7 @@
 // Plan&Ride web version (testEM internally): entry point. Home, account, history, settings,
 // PIN lock, bug reports and suggestions. The account is optional, like in the Android app.
 import { t, lang, setLang, applyI18n, loadingHtml } from './js/i18n.js';
-import { $, $$, esc, api, apiJson, store, config, loadConfig, clock, dateText, money, toMs, toast, openPage, closeOverlay, switchRow, collectLogs, log, plate, countdown, VERSION } from './js/core.js';
+import { $, $$, esc, api, apiJson, store, config, loadConfig, shrinkImage, clock, dateText, money, toMs, toast, openPage, closeOverlay, switchRow, collectLogs, log, plate, countdown, VERSION } from './js/core.js';
 import { historyInsights, historyToCsv, nextRideDeparture, pickRideConnection, readableStop, lineNumber, todayLocal, walletForLine } from './js/logic.js';
 import * as live from './js/live.js';
 import { renderPlanner, searchAt, savedJourneys, journeyTimes, removeJourney } from './js/planner.js';
@@ -135,6 +135,11 @@ async function decryptCreds(pin) {
   } catch { return null; }
 }
 const hasPin = () => !!store.get('credsEnc');
+/**
+ * EM-0106: the rider chose never to lock (Security, after a warning). The PIN stays set; the passwords are then also
+ * kept readable on this device ('pinFree'), since the app must open without the PIN. Choosing a time removes them.
+ */
+const neverLock = () => store.get('lockAfter', 0) < 0;
 
 // ---- EM-0125: Face ID or a fingerprint (a passkey) instead of typing the PIN
 // The passkey's PRF extension gives a secret only that passkey gives, and only after Face ID: it encrypts a copy of the
@@ -196,6 +201,7 @@ const unlocked = () => hasAccount() && !!s.creds;
 async function saveCreds(creds) {
   s.creds = creds;
   if (s.pin) await encryptCreds(creds, s.pin);
+  if (neverLock()) store.set('pinFree', creds);
 }
 
 // ------------------------------------------------------------------ views
@@ -444,6 +450,8 @@ function removeAccount() {
   store.set('creds', null);
   store.set('credsEnc', null);
   store.set('pinPasskey', null);
+  store.set('pinFree', null);
+  store.set('lockAfter', 0);
   store.set('serial', null);
   store.set('onboarded', true);
   closeOverlay('page');
@@ -893,7 +901,7 @@ function stopPolling() { s.polling = false; clearTimeout(s.pollTimer); }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { s.hiddenAt = Date.now(); clearTimeout(s.pollTimer); return; }
   // Only after the app was really in the background (iOS also fires this on other occasions).
-  if (hasPin() && s.creds && s.hiddenAt && Date.now() - s.hiddenAt >= store.get('lockAfter', 0) * 1000) lockNow();
+  if (hasPin() && !neverLock() && s.creds && s.hiddenAt && Date.now() - s.hiddenAt >= store.get('lockAfter', 0) * 1000) lockNow();
   s.hiddenAt = 0;
   requestWakeLock();
   if (s.polling) pollOnce();
@@ -1221,7 +1229,7 @@ function sources(body) {
 }
 
 function security(body) {
-  const timeouts = [[0, 'lock_immediately'], [30, 'lock_30s'], [60, 'lock_1m'], [300, 'lock_5m']];
+  const timeouts = [[0, 'lock_immediately'], [30, 'lock_30s'], [60, 'lock_1m'], [300, 'lock_5m'], [-1, 'lock_never']];
   const pinForm = (withCurrent) => `<form class="stack" id="pin-form">
       ${withCurrent ? `<label class="field">${t('pin_current')}<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" name="current" required></label>` : ''}
       <label class="field">${t('pin_new')}<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" name="pin" required></label>
@@ -1253,7 +1261,16 @@ function security(body) {
     security(body);
   };
   body.onchange = async (e) => {
-    if (e.target.name === 'lockAfter') store.set('lockAfter', Number(e.target.value));
+    if (e.target.name === 'lockAfter') {
+      const sec = Number(e.target.value);
+      if (sec < 0) {
+        // EM-0106: only after the warning, and only while unlocked (the passwords must be at hand to keep).
+        if (!s.creds) { toast(t('passkey_need_unlock')); return security(body); }
+        if (!confirm(t('lock_never_warning'))) return security(body);
+        store.set('pinFree', s.creds);
+      } else store.set('pinFree', null);
+      store.set('lockAfter', sec);
+    }
     if (e.target.id !== 'passkey') return;
     if (!e.target.checked) { store.set('pinPasskey', null); toast(t('passkey_off')); return; }
     if (!s.pin) { e.target.checked = false; toast(t('passkey_need_unlock')); return; }
@@ -1454,20 +1471,6 @@ const site = (page) => `https://par.karafa.net/${lang() === 'en' ? 'en/' : ''}${
 
 const CATEGORIES = ['crash', 'ticket', 'departures', 'planner', 'tracking', 'account', 'other'];
 
-/** A photo for a bug report: at most 1600 px on the longer side, JPEG, as base64 (a phone photo is ~200 kB then). */
-async function shrinkImage(file) {
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(bitmap.width * scale);
-  canvas.height = Math.round(bitmap.height * scale);
-  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise((done) => canvas.toBlob(done, 'image/jpeg', 0.8));
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
-}
 /** feature: a suggestion (no category, no logs); emhub lists them apart from bugs. */
 function bugReport(body, feature = false) {
   if (!config.hub) { body.innerHTML = `<div class="notice warn">${t('bug_off')}</div>`; return; }
@@ -1632,6 +1635,10 @@ document.addEventListener('focusout', () => setTimeout(() => { if (!document.act
     return;
   }
   if (!hasAccount() && !store.get('onboarded', false) && !params.has('follow')) return showLogin({ welcome: true });
+  // EM-0106: never locked: the passwords are at hand, no PIN asked.
+  const free = neverLock() && hasPin() && store.get('pinFree');
+  if (free) s.creds = free;
   showApp(); // with an account: locked until the PIN, the rest works right away
+  if (free) afterUnlock();
   handleLaunch(params);
 })();

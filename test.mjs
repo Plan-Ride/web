@@ -255,4 +255,30 @@ console.log('ok');
   cost = journeyCost(tariffs, [seg('Bus 60101', '8:00', { tariff: 'ids', units: 3 })], 'full', false, true);
   assert.deepEqual([cost.idsCents, cost.covered], [0, true], 'a season ticket covers it');
   console.log('ok 2.18.0 web: trip day, kinds, modes, fares');
+
+  // EM-0110: a city bus ridden before the journey (followed in the app) gives the next one its change's price.
+  const { heldTicket, cityTown } = await import('./public/js/fares.js');
+  const named = parseTariffs({ tariffs: [
+    { id: 'mhd-bb', name: 'MHD Banská Bystrica', kind: 'flat', transferMinutes: 45, transferCents: 10, prices: { full: [50, 100], student: [30, 50] } },
+    { id: 'mhd-zv', name: 'MHD Zvolen', kind: 'flat', transferMinutes: 45, transferCents: 0, prices: { full: [50, 60], student: [27, 30] } },
+  ] });
+  const t24 = (h, m) => localToEpoch(2026, 11, 24, h, m);
+  const leg = (time, tariff) => ({ line: 'Bus 7', departureTime: time, operatorName: '', group: 'city', tariff, serviceDate: '2026-11-24' });
+  const price = (held, ...legs) => journeyCost(named, legs, 'student', false, false, held).sadzvCents;
+  const held = heldTicket(named, [{ town: 'Banská Bystrica', boardedMs: t24(13, 0) }], t24(13, 20));
+  assert.deepEqual(held, { tariffId: 'mhd-bb', boughtMs: t24(13, 0), changed: false });
+  assert.equal(price(held, leg('13:30', 'mhd-bb')), 10, 'the change, 0,10');
+  assert.equal(price(held, leg('13:50', 'mhd-bb')), 30, 'past its 45 minutes: a new ticket');
+  assert.equal(price(held, leg('13:30', 'mhd-bb'), leg('13:35', 'mhd-bb')), 40, 'after the change: a new ticket');
+  const used = heldTicket(named, [{ town: 'Banská Bystrica', boardedMs: t24(13, 0) }, { town: 'Banská Bystrica', boardedMs: t24(13, 10) }], t24(13, 20));
+  assert.equal(price(used, leg('13:30', 'mhd-bb')), 30, 'the change already used');
+  assert.equal(heldTicket(named, [{ town: 'Banská Bystrica', boardedMs: t24(13, 0) }], t24(13, 50)), null, 'too old');
+  const zv = heldTicket(named, [{ town: 'Zvolen', boardedMs: t24(8, 0) }, { town: 'Zvolen', boardedMs: t24(8, 15) }], t24(8, 20));
+  assert.equal(price(zv, leg('8:30', 'mhd-zv')), 0, 'Zvolen: changes are free');
+  assert.equal(price(held, leg('13:30', 'mhd-zv')), 27, "another town's ticket doesn't help");
+  assert.equal(cityTown('Bus 6', 'Banská Bystrica, Štadlerovo nábrežie'), 'Banská Bystrica');
+  assert.equal(cityTown('Bus 60411', 'Zvolen, AS'), null);
+  assert.equal(cityTown('060411', 'Zvolen, AS'), null);
+  assert.equal(cityTown('R 842', 'Zvolen, osobná stanica'), null);
+  console.log('ok EM-0110 web: the change of a ticket ridden before');
 }

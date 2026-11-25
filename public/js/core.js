@@ -1,7 +1,7 @@
 // Shared helpers for the web client: DOM, storage, API, formatting, sheets, logs.
 import { t, lang } from './i18n.js';
 
-export const VERSION = '2.18.5';
+export const VERSION = '2.18.6';
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -199,3 +199,18 @@ addEventListener('keydown', (e) => {
 export const switchRow = (id, title, hint, checked, disabled = false) => `
   <label class="row switch-row"><span class="row-text"><span class="row-title">${esc(title)}</span>${hint ? `<span class="row-sub">${esc(hint)}</span>` : ''}</span>
   <input type="checkbox" role="switch" id="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}></label>`;
+
+/** A photo for a bug report or a submission (EM-0120): at most 1600 px on the longer side, JPEG, as base64 (a phone photo is ~200 kB then). */
+export async function shrinkImage(file) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((done) => canvas.toBlob(done, 'image/jpeg', 0.8));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}

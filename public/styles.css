@@ -299,9 +299,16 @@ input[type="color"] { width: 32px; height: 32px; border: 0; background: none; pa
 .dot { width: 12px; height: 12px; border-radius: 50%; margin-left: 9px; border: 2.5px solid var(--line); background: var(--surface); position: relative; z-index: 1; flex: none; }
 .passed .dot, .next .dot { border-color: var(--accent); background: var(--accent); }
 .next .dot { width: 16px; height: 16px; margin-left: 7px; }
-.alight .dot { border-radius: 2px; border-color: var(--accent); background: var(--accent); }
-.boarding .dot { border-color: var(--accent); background: var(--surface); border-width: 3px; }
-.timeline li.boarding { background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 10px; }
+/* EM-0095: getting on in green, getting off in the theme colour: each its square, an edge, a band and an icon. */
+.alight .dot, .boarding .dot { border-radius: 3px; width: 14px; height: 14px; margin-left: 8px; }
+.alight .dot { border-color: var(--accent); background: var(--accent); }
+.boarding .dot { border-color: var(--ok); background: var(--ok); }
+.timeline li.alight { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 10px; box-shadow: inset 4px 0 var(--accent); }
+.timeline li.boarding { background: color-mix(in srgb, var(--ok) 14%, transparent); border-radius: 10px; box-shadow: inset 4px 0 var(--ok); }
+.timeline .mark { display: flex; align-items: center; gap: 4px; font-weight: 700; }
+.timeline .mark svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
+.alight .mark { color: var(--accent-text); }
+.boarding .mark { color: var(--ok); }
 .stop-name { flex: 1; min-width: 0; }
 .stop-name small { display: block; color: var(--accent-text); font-weight: 600; }
 .stop-name small.stop-pf { color: var(--muted); font-weight: 500; }
