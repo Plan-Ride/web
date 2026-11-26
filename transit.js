@@ -204,7 +204,7 @@ const HUB_APP_KEY = process.env.HUB_APP_KEY || '';
 /** value2 of stop suggestions from emhub; older saved ones came from cp.sk and are looked up by name. */
 const HUB_STOP = 'hub';
 /** S.A.D. Zvolen buses are on the board live from sadzv already. */
-const SADZV_FEED = 'sad-zvolen-as';
+const SADZV_CITY_FEED = 'sad-zvolen-as-city'; // the only S.A.D. buses sadzv's live boards list
 
 /** 2.18.0: the kinds of transport emHUB knows; stop search and boards always ask for all of them, the planner for its switches. */
 export const MODES = ['bus', 'city', 'rail'];
@@ -317,7 +317,7 @@ export async function getBoard(platformIds, stop) {
   if (live.status === 'rejected' && other.status === 'rejected') throw live.reason;
   const liveRows = live.status === 'fulfilled' ? live.value : [];
   const liveUntil = Math.max(0, ...liveRows.map((d) => d.departsAtMs));
-  const otherRows = other.status === 'fulfilled' ? other.value.filter((r) => (!r.feed.startsWith(SADZV_FEED) || r.departsAtMs <= liveUntil)
+  const otherRows = other.status === 'fulfilled' ? other.value.filter((r) => (r.feed !== SADZV_CITY_FEED || r.departsAtMs <= liveUntil)
     && !liveRows.some((d) => sameBus(d, { ...r, minutes: r.plannedSecondOfDay / 60 }))) : [];
   return [...liveRows, ...otherRows].sort((a, b) => a.departsAtMs - b.departsAtMs);
 }
