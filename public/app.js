@@ -1591,7 +1591,7 @@ async function handleLaunch(params) {
   if (shared) {
     try {
       const p = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(shared.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))));
-      if (p?.ref?.line) { selectTab('departures'); live.openTrip(p.ref, { boardingPlatformIds: p.board || [], alightOrder: p.alight ?? null }); }
+      if (p?.ref?.line) { selectTab('departures'); live.openTrip(p.ref, { boardingPlatformIds: p.board || [], alightOrder: p.alight ?? null, journey: live.sharedJourney(p) }); }
     } catch { toast(t('share_bad_link')); }
     return;
   }

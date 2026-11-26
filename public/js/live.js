@@ -3,7 +3,7 @@ import { t, lang, loadingHtml } from './i18n.js';
 import { $, $$, esc, api, apiJson, store, config, clock, countdown, delayChip, delayInfo, plate, kindIcon, kindPlate, toast, openSheet, openPage, closeOverlay, log } from './core.js';
 import { openSubmit } from './submit.js';
 import { cityTown } from './fares.js';
-import { plateLine, tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
+import { plateLine, scheduledAt, tripProgress, usualNow, catchEstimate, communityKey, distanceMeters, readableStop, lineNumber, snapToRoute, referenceAt, delayAt, nextCheckMs, stopPassDetector, earliestBoardingMs, LIVE_GPS_BEFORE_MS, RIDER_GPS_MAX_M, plannerLeg, localToEpoch, todayLocal, lineKind } from './logic.js';
 
 /** Helping with bus positions: 'off' | 'buttons' | 'auto' (earlier versions had an on/off switch). */
 export const communityMode = () => store.get('communityMode', store.get('communityOn', false) ? 'buttons' : 'off');
@@ -254,8 +254,8 @@ const OFF_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m17 7-1.4
 
 let sheetTrip = null; // { ref, boardingPlatformIds, alightOrder, detail, loading, error }
 
-export function openTrip(ref, { boardingPlatformIds = [], alightOrder = null } = {}) {
-  sheetTrip = { ref, boardingPlatformIds, alightOrder, detail: null, loading: true, error: false };
+export function openTrip(ref, { boardingPlatformIds = [], alightOrder = null, journey = null } = {}) {
+  sheetTrip = { ref, boardingPlatformIds, alightOrder, detail: null, loading: true, error: false, journey, legs: {} };
   const body = openSheet(ref.line + ' → ' + (ref.destination || ''), () => { sheetTrip = null; });
   renderTripSheet(body);
   loadTrip(ref).then((detail) => {
@@ -327,9 +327,26 @@ const MAP_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="tr
 const CLOSE_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>';
 const SHARE_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M18 16.1c-.8 0-1.4.3-2 .8l-7.1-4.2c.1-.2.1-.5.1-.7s0-.5-.1-.7l7-4.1c.5.5 1.2.8 2.1.8 1.7 0 3-1.3 3-3s-1.3-3-3-3-3 1.3-3 3c0 .2 0 .5.1.7l-7 4.1c-.5-.5-1.2-.8-2.1-.8-1.7 0-3 1.3-3 3s1.3 3 3 3c.8 0 1.6-.3 2.1-.8l7.1 4.2c-.1.2-.1.4-.1.6 0 1.6 1.3 2.9 2.9 2.9s2.9-1.3 2.9-2.9-1.3-2.9-2.9-2.9Z"/></svg>';
 
-/** The bus as the share payload (the same as the Android app's): only the bus and where it's ridden, nothing about the sharer. */
-const sharePayload = (trip) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(
-  { ref: trip.ref, board: trip.boardingPlatformIds || [], alight: trip.alightOrder ?? null })))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** "13:50" on a bus's service day as epoch ms (null when either is missing). */
+function legMs(ref, hm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hm || ''), d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ref?.serviceDate || '');
+  return m && d ? localToEpoch(+d[1], +d[2], +d[3], +m[1], +m[2]) : null;
+}
+/** One bus of the share payload; EM-0133: the first also carries the rest of the journey ("next"). */
+const sharedLeg = (l, withNext) => ({
+  ref: l.ref, board: l.boardingPlatformIds || [], alight: l.alightOrder ?? null,
+  from: l.fromStop || null, to: l.toStop || null, leaves: legMs(l.ref, l.leaves), arrives: legMs(l.ref, l.arrives),
+  ...(withNext && l.nextLegs?.length ? { next: l.nextLegs.map((x) => sharedLeg(x, false)) } : {}),
+});
+/** The bus (and the rest of its journey) as the share payload, the same as the Android app's: nothing about the sharer. */
+const sharePayload = (trip) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(sharedLeg(trip, true)))))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** A shared link's payload back as a journey to show and follow (EM-0133); null without later buses. */
+export function sharedJourney(p) {
+  const leg = (x) => ({ ref: x.ref, boardingPlatformIds: x.board || [], alightOrder: x.alight ?? null, fromStop: x.from || '', toStop: x.to || null,
+    leaves: x.leaves ? clock(x.leaves) : '', arrives: x.arrives ? clock(x.arrives) : null });
+  return p?.next?.length ? { ...leg(p), nextLegs: p.next.filter((x) => x?.ref?.line).map(leg) } : null;
+}
 
 /**
  * One side of a share over a WebSocket to emhub: status news and the other side's positions as they happen.
@@ -544,6 +561,8 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
     ? (detail?.community && detail.positionSource !== 'timetable' ? `${delayChip(detail.delaySeconds)} <span class="hint small">${esc(ridersText(detail.community.reporters))}</span>` : `<span class="hint small">${t('schedule_only')}</span>`)
     : delayChip(detail?.delaySeconds);
   const statusLine = historyText(detail) ? `${status} ${historyHint(detail)}` : status;
+  // EM-0133: the whole journey, followed or opened from a shared link (also before it starts).
+  const journey = following && follow.nextLegs?.length ? follow : !following && s.journey?.nextLegs?.length ? s.journey : null;
   let timeline = '';
   if (s.loading) timeline = loadingHtml();
   else if (s.error || !detail?.stops?.length) timeline = `<div class="empty"><p>${t('trip_unavailable')}</p></div>`;
@@ -572,17 +591,22 @@ function renderTripSheet(body = $('#sheet .sheet-body')) {
          <button class="btn outline wide" data-add-journey ${detail?.stops?.length ? '' : 'disabled'}>${t('journey_add')}</button>
          ${alight == null ? `<p class="hint small">${t('journey_pick_alight')}</p>` : ''}`}
     <div data-journey-bar>${journeyBarHtml()}</div>
-    ${following && follow.nextLegs?.length ? wholeJourneyHtml(follow, detail) : ''}
-    ${timeline}`;
+    ${journey ? wholeJourneyHtml(journey, detail) : ''}
+    ${timeline}
+    ${journey ? journey.nextLegs.map((leg, i) => legStopsHtml(s, leg, i ? journey.nextLegs[i - 1] : journey, i)).join('') : ''}`;
   bindJourneyBar($('[data-journey-bar]', body));
   body.onclick = (e) => {
     if (e.target.closest('[data-follow]')) {
-      startFollow({ ref: s.ref, boardingPlatformIds: s.boardingPlatformIds, alightOrder: s.alightOrder, detail: s.detail });
+      // EM-0133: a shared journey is followed whole.
+      startFollow(s.journey ? { ...s.journey, detail: s.detail } : { ref: s.ref, boardingPlatformIds: s.boardingPlatformIds, alightOrder: s.alightOrder, detail: s.detail });
     }
     if (e.target.closest('[data-unfollow]')) stopFollow();
     if (e.target.closest('[data-unfollow-other]')) { dropOther(s.ref); return renderTripSheet(); }
     if (e.target.closest('[data-map]')) return openBusMap(s.ref, detail, alight);
-    if (e.target.closest('[data-share]')) return shareTrip({ ref: s.ref, boardingPlatformIds: following ? follow.boardingPlatformIds : s.boardingPlatformIds, alightOrder: alight }, detail?.destination || s.ref.destination);
+    if (e.target.closest('[data-share]')) {
+      const whole = following ? follow : s.journey;
+      return shareTrip(whole || { ref: s.ref, boardingPlatformIds: s.boardingPlatformIds, alightOrder: alight }, detail?.destination || s.ref.destination);
+    }
     if (e.target.closest('[data-add-journey]')) addToDraft({ ref: s.ref, boardingPlatformIds: s.boardingPlatformIds, alightOrder: s.alightOrder, ...legStops(s, detail, alight) });
     const a = e.target.closest('[data-alight]');
     if (a && following) setAlight(Number(a.dataset.alight));
@@ -612,6 +636,32 @@ function wholeJourneyHtml(f, detail) {
   }).join('');
   const end = legs.at(-1).arrives;
   return `<section class="journey-whole"><h4>${t('journey_whole')}</h4><ol>${rows}</ol>${end ? `<p class="hint small">${esc(t('journey_there_at', end))}</p>` : ''}</section>`;
+}
+
+/**
+ * EM-0133: a later bus of the journey in the sheet: the change to it, then all its stops with where you get on and off
+ * (loaded once, the first time the sheet shows it).
+ */
+function legStopsHtml(s, leg, before, i) {
+  const key = String(i);
+  if (!(key in s.legs)) {
+    s.legs[key] = null;
+    loadTrip(leg.ref).then((d) => { s.legs[key] = d || { stops: [] }; if (sheetTrip === s) renderTripSheet(); })
+      .catch(() => { s.legs[key] = { stops: [] }; if (sheetTrip === s) renderTripSheet(); });
+  }
+  const d = s.legs[key];
+  const wait = legMs(before.ref, before.arrives) && legMs(leg.ref, leg.leaves) ? Math.round((legMs(leg.ref, leg.leaves) - legMs(before.ref, before.arrives)) / 60000) : null;
+  const board = d?.boardingOrder ?? d?.stops?.find((x) => (leg.boardingPlatformIds || []).includes(x.platformId))?.order;
+  const alight = leg.alightOrder ?? d?.alightOrder;
+  const stops = !d ? loadingHtml() : !d.stops?.length ? `<div class="empty"><p>${t('trip_unavailable')}</p></div>`
+    : `<ol class="timeline">${d.stops.map((stop) => {
+      const isAlight = stop.order === alight, isBoard = !isAlight && stop.order === board;
+      return `<li class="${isAlight ? 'alight' : ''} ${isBoard ? 'boarding' : ''}"><button disabled><span class="dot"></span><span class="stop-name">${esc(stop.name)}${isAlight ? `<small class="mark">${OFF_ICON}${t('your_stop')}</small>` : ''}${isBoard ? `<small class="mark">${ON_ICON}${t('your_board')}</small>` : ''}${stop.platform ? `<small class="stop-pf">${esc(t('platform', stop.platform))}</small>` : ''}</span><span class="stop-time">${clock(stop.scheduledMs)}</span></button></li>`;
+    }).join('')}</ol>`;
+  return `<section class="leg-stops">
+    ${wait != null ? `<p class="jw-change">${esc(t('journey_change_wait', Math.max(0, wait), readableStop(leg.fromStop || before.toStop || '')))}</p>` : ''}
+    <div class="trip-head">${kindPlate(leg.ref.line, lineKind(leg.ref.line))}<div class="trip-title"><h3>${esc(d?.destination || leg.ref.destination || '')}</h3></div></div>
+    ${stops}</section>`;
 }
 
 const ridersText = (n) => (n === 1 ? t('community_rider') : t('community_riders', n));
@@ -1035,11 +1085,12 @@ function onRiderFix(pos) {
   // EM-0104: between stops the place is measured along the straight line from stop to stop, which is rough: the
   // minutes to the next stop went up and down with every fix. The delay at the last stop stays, unless the bus is
   // clearly (a minute) later than that.
-  const between = delayAt(hit.index, scheduled, now);
+  // EM-0130: between stops (not at one) against where the timetable has the bus there: it isn't waiting for a departure.
+  const between = atStop ? delayAt(hit.index, scheduled, now) : Math.round((now - scheduledAt(hit.index, scheduled)) / 1000);
   follow.localDelay = { seconds: stopDelay != null && between - stopDelay < 60 ? stopDelay : between, at: now, fromGps: true };
   renderAllFollowSlots();
   if (now - lastRiderReportAt < 15000) return; // between stops: every 15 s
-  send(Math.min(Math.floor(hit.index), d.stops.length - 1), referenceAt(hit.index, scheduled, now));
+  send(Math.min(Math.floor(hit.index), d.stops.length - 1), atStop ? referenceAt(hit.index, scheduled, now) : scheduledAt(hit.index, scheduled));
 }
 
 function catchLine(d, p) {
