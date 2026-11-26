@@ -347,9 +347,13 @@ async function timetableFallback(ref) {
   if (cached && (cached.trip || Date.now() - cached.at < 10 * 60000)) return cached.trip;
   const stop = (await getStops()).find((s) => s.id === ref.fromStopId);
   let trip = null;
+  // EM-0134: only a real "not in the timetable" is remembered (for every web user, 10 min). A failed request (emHUB
+  // restarting) is asked again next time.
   if (stop) {
-    const row = await findTimetableTrip(stop, ref.line, Math.floor(ref.plannedSecondOfDay / 60) % 1440).catch(() => null);
-    if (row) trip = await getScheduledTrip({ line: ref.line, destination: ref.destination, scheduleUrl: row.scheduleUrl, serviceDate: row.serviceDate }).catch(() => null);
+    let failed = false;
+    const row = await findTimetableTrip(stop, ref.line, Math.floor(ref.plannedSecondOfDay / 60) % 1440).catch(() => { failed = true; return null; });
+    if (row) trip = await getScheduledTrip({ line: ref.line, destination: ref.destination, scheduleUrl: row.scheduleUrl, serviceDate: row.serviceDate }).catch(() => { failed = true; return null; });
+    if (failed) return null;
   }
   if (fallbackCache.size > 2000) fallbackCache.clear();
   fallbackCache.set(key, { trip: trip?.stops.length ? trip : null, at: Date.now() });
